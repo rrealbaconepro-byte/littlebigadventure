@@ -1,0 +1,710 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LittleBigAdventure — LBA</title>
+
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        font-family: Arial, Helvetica, sans-serif;
+        color: #3a2a1d;
+    }
+
+    body {
+        background:
+            url("https://i.postimg.cc/XqTnFvps/Chat-GPT-Image-Sep-29-2026-at-05-53-35-PM.png")
+            center / cover fixed;
+    }
+
+    body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background: rgba(255, 239, 210, 0.12);
+        z-index: -1;
+    }
+
+    /* TOP BAR */
+
+    .topbar {
+        width: 100%;
+        min-height: 82px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 35px;
+        background:
+            url("https://i.postimg.cc/XqTnFvps/Chat-GPT-Image-Sep-29-2026-at-05-53-35-PM.png")
+            center / cover;
+        border-bottom: 5px solid rgba(73, 45, 24, 0.35);
+        box-shadow: 0 5px 15px rgba(0,0,0,.28);
+        position: sticky;
+        top: 0;
+        z-index: 20;
+    }
+
+    .logo {
+        height: 62px;
+        width: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 3px 2px rgba(0,0,0,.35));
+    }
+
+    .nav {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .nav a {
+        color: #fff;
+        text-decoration: none;
+        font-weight: bold;
+        font-size: 15px;
+        padding: 12px 18px;
+        border-radius: 9px;
+        background: linear-gradient(#755333, #4d321e);
+        border: 2px solid rgba(255,255,255,.25);
+        box-shadow:
+            inset 0 2px rgba(255,255,255,.18),
+            0 3px 5px rgba(0,0,0,.25);
+        transition: .15s;
+    }
+
+    .nav a:hover {
+        transform: translateY(-2px);
+        background: linear-gradient(#8d6741, #5d3c22);
+    }
+
+    /* HERO */
+
+    .hero {
+        max-width: 1200px;
+        margin: 35px auto 25px;
+        padding: 45px 35px;
+        text-align: center;
+        background: rgba(245, 224, 190, .92);
+        border: 5px solid rgba(80, 52, 31, .55);
+        border-radius: 22px;
+        box-shadow: 0 9px 20px rgba(0,0,0,.25);
+    }
+
+    .hero h1 {
+        margin: 0 0 10px;
+        font-size: clamp(35px, 6vw, 68px);
+        color: #4d311c;
+        text-shadow:
+            2px 3px 0 #fff0d3,
+            4px 5px 0 rgba(70,40,20,.18);
+    }
+
+    .hero p {
+        max-width: 750px;
+        margin: auto;
+        font-size: 19px;
+        line-height: 1.5;
+    }
+
+    .hero-buttons {
+        margin-top: 25px;
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .big-button {
+        display: inline-block;
+        padding: 14px 26px;
+        border-radius: 12px;
+        background: linear-gradient(#f6b53d, #b96b19);
+        color: white;
+        text-decoration: none;
+        font-weight: bold;
+        font-size: 17px;
+        border: 3px solid #70411d;
+        box-shadow: 0 5px 0 #70411d, 0 8px 12px rgba(0,0,0,.22);
+        transition: .12s;
+    }
+
+    .big-button:hover {
+        transform: translateY(-2px);
+    }
+
+    .big-button:active {
+        transform: translateY(4px);
+        box-shadow: 0 1px 0 #70411d;
+    }
+
+    /* GENERAL */
+
+    .container {
+        width: min(1200px, calc(100% - 30px));
+        margin: auto;
+    }
+
+    .section {
+        margin: 25px 0;
+        background: rgba(248, 232, 204, .94);
+        border: 4px solid rgba(81, 52, 31, .45);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: 0 7px 18px rgba(0,0,0,.23);
+    }
+
+    .section-title {
+        padding: 18px 22px;
+        background: linear-gradient(#765333, #4c311d);
+        color: white;
+        font-size: 25px;
+        font-weight: bold;
+        text-shadow: 0 2px 2px rgba(0,0,0,.45);
+    }
+
+    .section-content {
+        padding: 25px;
+    }
+
+    /* POPULAR */
+
+    .popular-banner {
+        min-height: 220px;
+        background:
+            linear-gradient(rgba(40,20,5,.15), rgba(40,20,5,.45)),
+            url("https://i.postimg.cc/YCY4q5hf/Chat-GPT-Image-Sep-29-2026-at-05-43-17-PM.png")
+            center / cover;
+        border-radius: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        border: 3px solid rgba(80,45,20,.45);
+        overflow: hidden;
+    }
+
+    .popular-banner h2 {
+        color: white;
+        font-size: clamp(30px, 5vw, 55px);
+        margin: 0;
+        text-shadow:
+            0 4px 5px rgba(0,0,0,.65),
+            2px 2px #4b2710;
+    }
+
+    .level-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 16px;
+        margin-top: 20px;
+    }
+
+    .level-card {
+        background: #ead0a8;
+        border: 3px solid #806044;
+        border-radius: 12px;
+        padding: 15px;
+        box-shadow: 0 4px 8px rgba(0,0,0,.15);
+    }
+
+    .level-card h3 {
+        margin: 0 0 8px;
+    }
+
+    .level-card p {
+        margin: 5px 0;
+        color: #694b31;
+    }
+
+    .rank {
+        display: inline-block;
+        background: #68411f;
+        color: white;
+        border-radius: 50%;
+        width: 34px;
+        height: 34px;
+        line-height: 34px;
+        text-align: center;
+        font-weight: bold;
+        margin-bottom: 8px;
+    }
+
+    /* ACCOUNT */
+
+    .account-box {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 25px;
+    }
+
+    .account-text h2 {
+        margin-top: 0;
+        font-size: 31px;
+    }
+
+    .account-text p {
+        font-size: 17px;
+        line-height: 1.55;
+    }
+
+    .account-form {
+        background: #dfbd8b;
+        border: 3px solid #806044;
+        border-radius: 14px;
+        padding: 20px;
+    }
+
+    .account-form input {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+        padding: 13px;
+        border-radius: 8px;
+        border: 2px solid #876344;
+        background: #fff8e9;
+        font-size: 15px;
+    }
+
+    .form-button {
+        width: 100%;
+        padding: 13px;
+        border: 0;
+        border-radius: 9px;
+        background: #68411f;
+        color: white;
+        font-weight: bold;
+        font-size: 16px;
+        cursor: pointer;
+    }
+
+    .form-button:hover {
+        background: #81552d;
+    }
+
+    /* NEW LEVELS */
+
+    .new-level {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 15px;
+        padding: 17px;
+        margin-bottom: 12px;
+        background: #ead2aa;
+        border: 2px solid #967250;
+        border-radius: 11px;
+    }
+
+    .new-level:last-child {
+        margin-bottom: 0;
+    }
+
+    .new-level h3 {
+        margin: 0 0 5px;
+    }
+
+    .new-level small {
+        color: #735236;
+    }
+
+    .play-button {
+        white-space: nowrap;
+        padding: 9px 16px;
+        background: #68411f;
+        color: white;
+        text-decoration: none;
+        border-radius: 7px;
+        font-weight: bold;
+    }
+
+    /* FOOTER */
+
+    footer {
+        margin-top: 40px;
+        padding: 35px 20px;
+        text-align: center;
+        color: white;
+        background: rgba(67, 42, 25, .94);
+        border-top: 5px solid rgba(255,255,255,.18);
+    }
+
+    footer img {
+        height: 48px;
+        margin-bottom: 10px;
+    }
+
+    footer p {
+        margin: 6px;
+        opacity: .9;
+    }
+
+    /* MOBILE */
+
+    @media (max-width: 750px) {
+        .topbar {
+            padding: 10px 15px;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .logo {
+            height: 55px;
+        }
+
+        .nav a {
+            font-size: 13px;
+            padding: 9px 12px;
+        }
+
+        .hero {
+            margin-top: 20px;
+            padding: 30px 20px;
+        }
+
+        .account-box {
+            grid-template-columns: 1fr;
+        }
+
+        .new-level {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .play-button {
+            width: 100%;
+            text-align: center;
+        }
+    }
+</style>
+</head>
+
+<body>
+
+<!-- HEADER -->
+
+<header class="topbar">
+
+    <a href="#">
+        <img
+            class="logo"
+            src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+            alt="LittleBigAdventure"
+        >
+    </a>
+
+    <nav class="nav">
+        <a href="#home">Home</a>
+        <a href="#popular">Popular</a>
+        <a href="#new">New Levels</a>
+        <a href="#account">Create Account</a>
+        <a href="#">Sign In</a>
+    </nav>
+
+</header>
+
+
+<main id="home">
+
+    <!-- HERO -->
+
+    <section class="hero">
+
+        <h1>LittleBigAdventure</h1>
+
+        <p>
+            Discover amazing adventures, meet creators,
+            and explore a whole world of community-made levels.
+        </p>
+
+        <div class="hero-buttons">
+            <a class="big-button" href="#popular">
+                Explore Levels
+            </a>
+
+            <a class="big-button" href="#account">
+                Create an Account
+            </a>
+        </div>
+
+    </section>
+
+
+    <div class="container">
+
+        <!-- POPULAR LEVELS -->
+
+        <section class="section" id="popular">
+
+            <div class="section-title">
+                🔥 Most Popular Levels — Top 100
+            </div>
+
+            <div class="section-content">
+
+                <div class="popular-banner">
+                    <h2>TOP 100</h2>
+                </div>
+
+                <div class="level-grid">
+
+                    <div class="level-card">
+                        <span class="rank">1</span>
+                        <h3>Adventure Island</h3>
+                        <p>❤️ 12,482 hearts</p>
+                        <p>▶ 84,201 plays</p>
+                        <p>By AdventureMaker</p>
+                    </div>
+
+                    <div class="level-card">
+                        <span class="rank">2</span>
+                        <h3>Mountain Escape</h3>
+                        <p>❤️ 10,913 hearts</p>
+                        <p>▶ 72,845 plays</p>
+                        <p>By MountainMaker</p>
+                    </div>
+
+                    <div class="level-card">
+                        <span class="rank">3</span>
+                        <h3>Dream Factory</h3>
+                        <p>❤️ 9,721 hearts</p>
+                        <p>▶ 68,203 plays</p>
+                        <p>By DreamBuilder</p>
+                    </div>
+
+                    <div class="level-card">
+                        <span class="rank">4</span>
+                        <h3>The Lost World</h3>
+                        <p>❤️ 8,542 hearts</p>
+                        <p>▶ 61,430 plays</p>
+                        <p>By LostCreator</p>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ACCOUNT CREATION -->
+
+        <section class="section" id="account">
+
+            <div class="section-title">
+                👤 Create Your LBA Account
+            </div>
+
+            <div class="section-content">
+
+                <div class="account-box">
+
+                    <div class="account-text">
+
+                        <h2>Join LittleBigAdventure</h2>
+
+                        <p>
+                            Create your own LBA account and become part
+                            of the LittleBigAdventure community.
+                        </p>
+
+                        <p>
+                            Publish your creations, discover levels,
+                            follow creators, and build your own adventure.
+                        </p>
+
+                        <p>
+                            Your account can later be connected to
+                            the LittleBigAdventure game.
+                        </p>
+
+                    </div>
+
+                    <form
+                        class="account-form"
+                        onsubmit="createAccount(event)"
+                    >
+
+                        <input
+                            id="username"
+                            type="text"
+                            placeholder="LBA Username"
+                            required
+                        >
+
+                        <input
+                            id="email"
+                            type="email"
+                            placeholder="Email"
+                        >
+
+                        <input
+                            id="password"
+                            type="password"
+                            placeholder="Password"
+                            required
+                        >
+
+                        <input
+                            id="password2"
+                            type="password"
+                            placeholder="Confirm Password"
+                            required
+                        >
+
+                        <button class="form-button" type="submit">
+                            Create Account
+                        </button>
+
+                    </form>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- NEW LEVELS -->
+
+        <section class="section" id="new">
+
+            <div class="section-title">
+                🆕 New Levels
+            </div>
+
+            <div class="section-content">
+
+                <div class="new-level">
+
+                    <div>
+                        <h3>Castle in the Clouds</h3>
+                        <small>
+                            Created by SkyBuilder · Just now
+                        </small>
+                    </div>
+
+                    <a class="play-button" href="#">
+                        View Level
+                    </a>
+
+                </div>
+
+
+                <div class="new-level">
+
+                    <div>
+                        <h3>Jungle Run</h3>
+                        <small>
+                            Created by JungleCreator · 4 minutes ago
+                        </small>
+                    </div>
+
+                    <a class="play-button" href="#">
+                        View Level
+                    </a>
+
+                </div>
+
+
+                <div class="new-level">
+
+                    <div>
+                        <h3>Underwater Adventure</h3>
+                        <small>
+                            Created by OceanMaker · 11 minutes ago
+                        </small>
+                    </div>
+
+                    <a class="play-button" href="#">
+                        View Level
+                    </a>
+
+                </div>
+
+
+                <div class="new-level">
+
+                    <div>
+                        <h3>Space Station</h3>
+                        <small>
+                            Created by StarCreator · 18 minutes ago
+                        </small>
+                    </div>
+
+                    <a class="play-button" href="#">
+                        View Level
+                    </a>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </div>
+
+</main>
+
+
+<!-- FOOTER -->
+
+<footer>
+
+    <img
+        src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+        alt="LBA"
+    >
+
+    <p>
+        LittleBigAdventure
+    </p>
+
+    <p>
+        A community adventure platform.
+    </p>
+
+</footer>
+
+
+<script>
+
+function createAccount(event) {
+
+    event.preventDefault();
+
+    const username =
+        document.getElementById("username").value.trim();
+
+    const password =
+        document.getElementById("password").value;
+
+    const password2 =
+        document.getElementById("password2").value;
+
+    if (password !== password2) {
+        alert("Your passwords do not match.");
+        return;
+    }
+
+    alert(
+        "Welcome to LittleBigAdventure, " +
+        username +
+        "!"
+    );
+}
+
+</script>
+
+</body>
+</html>
+```
