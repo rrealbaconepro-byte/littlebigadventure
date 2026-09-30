@@ -1,710 +1,728 @@
 ```html
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LittleBigAdventure — LBA</title>
 
-<style>
-    * {
-        box-sizing: border-box;
-    }
+<!--
 
-    html, body {
-        margin: 0;
-        padding: 0;
-        min-height: 100%;
-        font-family: Arial, Helvetica, sans-serif;
-        color: #3a2a1d;
-    }
+Hello inquisitive HTML voyeur, peeking underneath my veil. Welcome to my abode...
 
-    body {
-        background:
-            url("https://i.postimg.cc/XqTnFvps/Chat-GPT-Image-Sep-29-2026-at-05-53-35-PM.png")
-            center / cover fixed;
-    }
+    __    ____  ____                  
+   / /   / __ )/ __ \   ____ ___  ___ 
+  / /   / __  / /_/ /  / __ `__ \/ _ \
+ / /___/ /_/ / ____/_ / / / / / /  __/
+/_____/_____/_/    (_)_/ /_/ /_/\___/ 
 
-    body::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        background: rgba(255, 239, 210, 0.12);
-        z-index: -1;
-    }
+-->
 
-    /* TOP BAR */
+<script src="https://djpieces.neocities.org/name.js"></script>
 
-    .topbar {
-        width: 100%;
-        min-height: 82px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 10px 35px;
-        background:
-            url("https://i.postimg.cc/XqTnFvps/Chat-GPT-Image-Sep-29-2026-at-05-53-35-PM.png")
-            center / cover;
-        border-bottom: 5px solid rgba(73, 45, 24, 0.35);
-        box-shadow: 0 5px 15px rgba(0,0,0,.28);
-        position: sticky;
-        top: 0;
-        z-index: 20;
-    }
+<script>
+  if (typeof globalSiteSettings !== 'undefined') {
+    document.title = globalSiteSettings.name;
+  }
+</script>
 
-    .logo {
-        height: 62px;
-        width: auto;
-        object-fit: contain;
-        filter: drop-shadow(0 3px 2px rgba(0,0,0,.35));
-    }
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+<meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
+<meta content="LBP.me" property="og:site_name">
+<meta content="article" property="og:type">
+<meta content="http://lbp.me/" property="og:url">
+<link href="http://lbp.me/" rel="canonical">
 
-    .nav {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        justify-content: center;
-    }
+<meta content="index,follow,archive" name="robots">
+<meta content="LBP.me" name="title">
+<meta content="LittleBigPlanet, Little Big Planet, LittleBigPlanet 2, Community, Levels, LBP.me, Sackboy, PlayStation, PS3, Media Molecule, Sony" name="keywords">
+<meta content="Browse and discover LittleBigPlanet levels on LBP.me" name="description">
+<meta content="Browse and discover LittleBigPlanet levels on LBP.me" property="og:description">
+<meta content="LBP.me" property="og:title">
+<meta content="/web/20110722172609im_/http://lbp.me/" property="og:image">
 
-    .nav a {
-        color: #fff;
-        text-decoration: none;
-        font-weight: bold;
-        font-size: 15px;
-        padding: 12px 18px;
-        border-radius: 9px;
-        background: linear-gradient(#755333, #4d321e);
-        border: 2px solid rgba(255,255,255,.25);
-        box-shadow:
-            inset 0 2px rgba(255,255,255,.18),
-            0 3px 5px rgba(0,0,0,.25);
-        transition: .15s;
-    }
+<!-- LBP-DOT-ME-STYLEE -->
+<link href="https://djpieces.neocities.org/css/home_page.css" media="all" rel="stylesheet" type="text/css">
 
-    .nav a:hover {
-        transform: translateY(-2px);
-        background: linear-gradient(#8d6741, #5d3c22);
-    }
+<!-- SCRIPTZ -->
+<script type="text/javascript">
+  if (navigator.userAgent.match(/PlayStation/i)) {
+    document.write(
+      '<scr' +
+      'ipt type="text/javascript" src="https://web.archive.org/web/20110722172609/http://i.lbp.me/js/jquery/jquery-1.4.0.min.js"></scr' +
+      'ipt>'
+    );
+  } else {
+    document.write(
+      '<scr' +
+      'ipt type="text/javascript" src="https://web.archive.org/web/20110722172609/http://i.lbp.me/js/jquery/jquery-1.4.4.min.js"></scr' +
+      'ipt>'
+    );
+  }
+</script>
 
-    /* HERO */
+<script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/modernizr-1.5.min.js" type="text/javascript"></script>
+<script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/scripts.js" type="text/javascript"></script>
+<script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/jquery/plugins/jquery.swfobject.1-1-1.min.js" type="text/javascript"></script>
 
-    .hero {
-        max-width: 1200px;
-        margin: 35px auto 25px;
-        padding: 45px 35px;
-        text-align: center;
-        background: rgba(245, 224, 190, .92);
-        border: 5px solid rgba(80, 52, 31, .55);
-        border-radius: 22px;
-        box-shadow: 0 9px 20px rgba(0,0,0,.25);
-    }
+<!-- icons -->
+<link href="https://djpieces.neocities.org/images/icons/site_icon.png" rel="shortcut icon" type="image/x-icon">
 
-    .hero h1 {
-        margin: 0 0 10px;
-        font-size: clamp(35px, 6vw, 68px);
-        color: #4d311c;
-        text-shadow:
-            2px 3px 0 #fff0d3,
-            4px 5px 0 rgba(70,40,20,.18);
-    }
+<!-- iOS + Android icons -->
+<link href="http://i.lbp.me/images/ios-startup.jpg" rel="apple-touch-startup-image">
+<link href="https://web.archive.org/web/20110722172609im_/http://i.lbp.me/images/favicon.png" rel="apple-touch-icon" title="LBP.me" type="image/png">
 
-    .hero p {
-        max-width: 750px;
-        margin: auto;
-        font-size: 19px;
-        line-height: 1.5;
-    }
+<!-- AIIIIII-EEE! -->
+<!--[if lte IE 7]>
+<link href="http://i.lbp.me/css/style.ie7.css" media="all" rel="stylesheet" type="text/css">
+<![endif]-->
 
-    .hero-buttons {
-        margin-top: 25px;
-        display: flex;
-        gap: 12px;
-        justify-content: center;
-        flex-wrap: wrap;
-    }
+<!--[if lte IE 8]>
+<link href="http://i.lbp.me/css/style.ie8.css" media="all" rel="stylesheet" type="text/css">
+<![endif]-->
 
-    .big-button {
-        display: inline-block;
-        padding: 14px 26px;
-        border-radius: 12px;
-        background: linear-gradient(#f6b53d, #b96b19);
-        color: white;
-        text-decoration: none;
-        font-weight: bold;
-        font-size: 17px;
-        border: 3px solid #70411d;
-        box-shadow: 0 5px 0 #70411d, 0 8px 12px rgba(0,0,0,.22);
-        transition: .12s;
-    }
+<!--[if lte IE 9]>
+<link href="http://i.lbp.me/css/style.ie9.css" media="all" rel="stylesheet" type="text/css">
+<![endif]-->
 
-    .big-button:hover {
-        transform: translateY(-2px);
-    }
-
-    .big-button:active {
-        transform: translateY(4px);
-        box-shadow: 0 1px 0 #70411d;
-    }
-
-    /* GENERAL */
-
-    .container {
-        width: min(1200px, calc(100% - 30px));
-        margin: auto;
-    }
-
-    .section {
-        margin: 25px 0;
-        background: rgba(248, 232, 204, .94);
-        border: 4px solid rgba(81, 52, 31, .45);
-        border-radius: 18px;
-        overflow: hidden;
-        box-shadow: 0 7px 18px rgba(0,0,0,.23);
-    }
-
-    .section-title {
-        padding: 18px 22px;
-        background: linear-gradient(#765333, #4c311d);
-        color: white;
-        font-size: 25px;
-        font-weight: bold;
-        text-shadow: 0 2px 2px rgba(0,0,0,.45);
-    }
-
-    .section-content {
-        padding: 25px;
-    }
-
-    /* POPULAR */
-
-    .popular-banner {
-        min-height: 220px;
-        background:
-            linear-gradient(rgba(40,20,5,.15), rgba(40,20,5,.45)),
-            url("https://i.postimg.cc/YCY4q5hf/Chat-GPT-Image-Sep-29-2026-at-05-43-17-PM.png")
-            center / cover;
-        border-radius: 13px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        border: 3px solid rgba(80,45,20,.45);
-        overflow: hidden;
-    }
-
-    .popular-banner h2 {
-        color: white;
-        font-size: clamp(30px, 5vw, 55px);
-        margin: 0;
-        text-shadow:
-            0 4px 5px rgba(0,0,0,.65),
-            2px 2px #4b2710;
-    }
-
-    .level-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-        gap: 16px;
-        margin-top: 20px;
-    }
-
-    .level-card {
-        background: #ead0a8;
-        border: 3px solid #806044;
-        border-radius: 12px;
-        padding: 15px;
-        box-shadow: 0 4px 8px rgba(0,0,0,.15);
-    }
-
-    .level-card h3 {
-        margin: 0 0 8px;
-    }
-
-    .level-card p {
-        margin: 5px 0;
-        color: #694b31;
-    }
-
-    .rank {
-        display: inline-block;
-        background: #68411f;
-        color: white;
-        border-radius: 50%;
-        width: 34px;
-        height: 34px;
-        line-height: 34px;
-        text-align: center;
-        font-weight: bold;
-        margin-bottom: 8px;
-    }
-
-    /* ACCOUNT */
-
-    .account-box {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 25px;
-    }
-
-    .account-text h2 {
-        margin-top: 0;
-        font-size: 31px;
-    }
-
-    .account-text p {
-        font-size: 17px;
-        line-height: 1.55;
-    }
-
-    .account-form {
-        background: #dfbd8b;
-        border: 3px solid #806044;
-        border-radius: 14px;
-        padding: 20px;
-    }
-
-    .account-form input {
-        display: block;
-        width: 100%;
-        margin: 10px 0;
-        padding: 13px;
-        border-radius: 8px;
-        border: 2px solid #876344;
-        background: #fff8e9;
-        font-size: 15px;
-    }
-
-    .form-button {
-        width: 100%;
-        padding: 13px;
-        border: 0;
-        border-radius: 9px;
-        background: #68411f;
-        color: white;
-        font-weight: bold;
-        font-size: 16px;
-        cursor: pointer;
-    }
-
-    .form-button:hover {
-        background: #81552d;
-    }
-
-    /* NEW LEVELS */
-
-    .new-level {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 15px;
-        padding: 17px;
-        margin-bottom: 12px;
-        background: #ead2aa;
-        border: 2px solid #967250;
-        border-radius: 11px;
-    }
-
-    .new-level:last-child {
-        margin-bottom: 0;
-    }
-
-    .new-level h3 {
-        margin: 0 0 5px;
-    }
-
-    .new-level small {
-        color: #735236;
-    }
-
-    .play-button {
-        white-space: nowrap;
-        padding: 9px 16px;
-        background: #68411f;
-        color: white;
-        text-decoration: none;
-        border-radius: 7px;
-        font-weight: bold;
-    }
-
-    /* FOOTER */
-
-    footer {
-        margin-top: 40px;
-        padding: 35px 20px;
-        text-align: center;
-        color: white;
-        background: rgba(67, 42, 25, .94);
-        border-top: 5px solid rgba(255,255,255,.18);
-    }
-
-    footer img {
-        height: 48px;
-        margin-bottom: 10px;
-    }
-
-    footer p {
-        margin: 6px;
-        opacity: .9;
-    }
-
-    /* MOBILE */
-
-    @media (max-width: 750px) {
-        .topbar {
-            padding: 10px 15px;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .logo {
-            height: 55px;
-        }
-
-        .nav a {
-            font-size: 13px;
-            padding: 9px 12px;
-        }
-
-        .hero {
-            margin-top: 20px;
-            padding: 30px 20px;
-        }
-
-        .account-box {
-            grid-template-columns: 1fr;
-        }
-
-        .new-level {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-
-        .play-button {
-            width: 100%;
-            text-align: center;
-        }
-    }
-</style>
 </head>
 
 <body>
 
-<!-- HEADER -->
+  <div id="makebelieve">
+    <span class="hide">&nbsp;</span>
+  </div>
 
-<header class="topbar">
+  <div id="topbar">
 
-    <a href="#">
-        <img
-            class="logo"
-            src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
-            alt="LittleBigAdventure"
-        >
-    </a>
+    <div class="container_12">
 
-    <nav class="nav">
-        <a href="#home">Home</a>
-        <a href="#popular">Popular</a>
-        <a href="#new">New Levels</a>
-        <a href="#account">Create Account</a>
-        <a href="#">Sign In</a>
-    </nav>
+      <div class="grid_12">
 
-</header>
+        <div class="grid_4 alpha">
 
+          <div id="switchbuttons">
 
-<main id="home">
+            <!-- Home button with LBP image -->
+            <a
+              class="Home"
+              href="https://djpieces.neocities.org/"
+              style="
+                display:flex;
+                align-items:center;
+                gap:10px;
+                position:relative;
+                top:-8px;
+              "
+            >
 
-    <!-- HERO -->
+              <img
+                src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+                alt=""
+                style="
+                  height:55px;
+                  width:auto;
+                  object-fit:contain;
+                "
+              >
 
-    <section class="hero">
+              <span>Home</span>
 
-        <h1>LittleBigAdventure</h1>
-
-        <p>
-            Discover amazing adventures, meet creators,
-            and explore a whole world of community-made levels.
-        </p>
-
-        <div class="hero-buttons">
-            <a class="big-button" href="#popular">
-                Explore Levels
             </a>
 
-            <a class="big-button" href="#account">
-                Create an Account
-            </a>
+          </div>
+
         </div>
 
-    </section>
+        <div class="grid_8 omega">
 
+          <div id="mainmenu">
 
-    <div class="container">
+            <ul class="loggedin" id="mm-options" style="display: none">
 
-        <!-- POPULAR LEVELS -->
+              <li id="mm-options-trigger">
 
-        <section class="section" id="popular">
+                <a class="a" href="#">
+                  Options
+                </a>
 
-            <div class="section-title">
-                🔥 Most Popular Levels — Top 100
-            </div>
+                <ul>
 
-            <div class="section-content">
-
-                <div class="popular-banner">
-                    <h2>TOP 100</h2>
-                </div>
-
-                <div class="level-grid">
-
-                    <div class="level-card">
-                        <span class="rank">1</span>
-                        <h3>Adventure Island</h3>
-                        <p>❤️ 12,482 hearts</p>
-                        <p>▶ 84,201 plays</p>
-                        <p>By AdventureMaker</p>
-                    </div>
-
-                    <div class="level-card">
-                        <span class="rank">2</span>
-                        <h3>Mountain Escape</h3>
-                        <p>❤️ 10,913 hearts</p>
-                        <p>▶ 72,845 plays</p>
-                        <p>By MountainMaker</p>
-                    </div>
-
-                    <div class="level-card">
-                        <span class="rank">3</span>
-                        <h3>Dream Factory</h3>
-                        <p>❤️ 9,721 hearts</p>
-                        <p>▶ 68,203 plays</p>
-                        <p>By DreamBuilder</p>
-                    </div>
-
-                    <div class="level-card">
-                        <span class="rank">4</span>
-                        <h3>The Lost World</h3>
-                        <p>❤️ 8,542 hearts</p>
-                        <p>▶ 61,430 plays</p>
-                        <p>By LostCreator</p>
-                    </div>
-
-                </div>
-
-            </div>
-
-        </section>
-
-
-        <!-- ACCOUNT CREATION -->
-
-        <section class="section" id="account">
-
-            <div class="section-title">
-                👤 Create Your LBA Account
-            </div>
-
-            <div class="section-content">
-
-                <div class="account-box">
-
-                    <div class="account-text">
-
-                        <h2>Join LittleBigAdventure</h2>
-
-                        <p>
-                            Create your own LBA account and become part
-                            of the LittleBigAdventure community.
-                        </p>
-
-                        <p>
-                            Publish your creations, discover levels,
-                            follow creators, and build your own adventure.
-                        </p>
-
-                        <p>
-                            Your account can later be connected to
-                            the LittleBigAdventure game.
-                        </p>
-
-                    </div>
-
-                    <form
-                        class="account-form"
-                        onsubmit="createAccount(event)"
+                  <li id="mm-dashboard">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/"
+                      title="Dashboard"
                     >
-
-                        <input
-                            id="username"
-                            type="text"
-                            placeholder="LBA Username"
-                            required
-                        >
-
-                        <input
-                            id="email"
-                            type="email"
-                            placeholder="Email"
-                        >
-
-                        <input
-                            id="password"
-                            type="password"
-                            placeholder="Password"
-                            required
-                        >
-
-                        <input
-                            id="password2"
-                            type="password"
-                            placeholder="Confirm Password"
-                            required
-                        >
-
-                        <button class="form-button" type="submit">
-                            Create Account
-                        </button>
-
-                    </form>
-
-                </div>
-
-            </div>
-
-        </section>
-
-
-        <!-- NEW LEVELS -->
-
-        <section class="section" id="new">
-
-            <div class="section-title">
-                🆕 New Levels
-            </div>
-
-            <div class="section-content">
-
-                <div class="new-level">
-
-                    <div>
-                        <h3>Castle in the Clouds</h3>
-                        <small>
-                            Created by SkyBuilder · Just now
-                        </small>
-                    </div>
-
-                    <a class="play-button" href="#">
-                        View Level
+                      Dashboard
                     </a>
+                  </li>
 
-                </div>
-
-
-                <div class="new-level">
-
-                    <div>
-                        <h3>Jungle Run</h3>
-                        <small>
-                            Created by JungleCreator · 4 minutes ago
-                        </small>
-                    </div>
-
-                    <a class="play-button" href="#">
-                        View Level
+                  <li id="mm-profile">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/me"
+                      title="My profile"
+                    >
+                      My profile
                     </a>
+                  </li>
 
-                </div>
-
-
-                <div class="new-level">
-
-                    <div>
-                        <h3>Underwater Adventure</h3>
-                        <small>
-                            Created by OceanMaker · 11 minutes ago
-                        </small>
-                    </div>
-
-                    <a class="play-button" href="#">
-                        View Level
+                  <li id="mm-queue">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/me/queue"
+                      title="My queue"
+                    >
+                      My queue
                     </a>
+                  </li>
 
-                </div>
-
-
-                <div class="new-level">
-
-                    <div>
-                        <h3>Space Station</h3>
-                        <small>
-                            Created by StarCreator · 18 minutes ago
-                        </small>
-                    </div>
-
-                    <a class="play-button" href="#">
-                        View Level
+                  <li id="mm-privacysettings">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/privacy_settings"
+                      title="Web Privacy Settings"
+                    >
+                      Web Privacy Settings
                     </a>
+                  </li>
 
-                </div>
+                  <li id="mm-settings">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/settings"
+                      title="Settings"
+                    >
+                      Settings
+                    </a>
+                  </li>
 
-            </div>
+                  <li id="mm-signout">
+                    <a
+                      href="/web/20110722172609/http://lbp.me/~logout"
+                      title="Sign out"
+                    >
+                      Sign out
+                    </a>
+                  </li>
 
-        </section>
+                </ul>
+
+              </li>
+
+            </ul>
+
+            <ul class="loggedout" id="accountmenu" style="display: none">
+
+              <li>
+
+                <span class="psntitle">
+
+                  <span
+                    class="logopsn"
+                    title="PlayStation® Network"
+                  ></span>
+
+                  PlayStation®Network
+
+                </span>
+
+              </li>
+
+              <li>
+
+                <a
+                  href="https://web.archive.org/web/20110722172609/https://store.playstation.com:443/accounts/register/beginNewAccountRegistrationFlow.action"
+                  title="Register with PlayStation®Network"
+                >
+                  Register
+                </a>
+
+              </li>
+
+              <li>
+
+                <a
+                  href="https://web.archive.org/web/20110722172609/http://lbp.me/psn/out"
+                  rel="shadowbox['Sign in with PSN'];width=640;height=480"
+                  title="Sign in with PSN"
+                >
+                  Sign in
+                </a>
+
+              </li>
+
+            </ul>
+
+          </div>
+
+        </div>
+
+        <div class="clear">&nbsp;</div>
+
+      </div>
 
     </div>
 
-</main>
+  </div>
 
 
-<!-- FOOTER -->
+  <div id="bgr">
 
-<footer>
+    <div id="bg">
 
-    <img
-        src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
-        alt="LBA"
-    >
+      <div class="clear divider">&nbsp;</div>
 
-    <p>
-        LittleBigAdventure
-    </p>
+      <div class="section">
 
-    <p>
-        A community adventure platform.
-    </p>
+        <div class="container container_12">
 
-</footer>
+          <div class="container container_12">
+
+            <div class="grid_12" id="welcomeintro">
+
+              <script>
+
+                $(document).ready(function() {
+
+                  if ($("html[lang='en']").length) {
+
+                    $('#welcomeintro').flash({
+
+                      swf: 'https://web.archive.org/web/20110722172609/http://i.lbp.me/images/welcome.swf',
+
+                      height: 256,
+                      width: 944,
+
+                      hasVersion: 10,
+
+                      wmode: 'transparent',
+
+                      AllowScriptAccess: 'always',
+
+                      flashvars: {
+
+                        loginurl:
+                          'https://web.archive.org/web/20110722172609/https://store.playstation.com:443/external/index.vm?returnURL=http%3A%2F%2Flbp.me%2Fpsn%2Fauthc',
+
+                        registerurl:
+                          'https://web.archive.org/web/20110722172609/https://store.playstation.com:443/accounts/register/beginNewAccountRegistrationFlow.action'
+
+                      },
+
+                      hasVersionFail: function() {
+                        return false;
+                      }
+
+                    });
+
+                  }
+
+                });
+
+              </script>
+
+              <img
+                height="256"
+                src="https://djpieces.neocities.org/images/welcome-en.jpg"
+                width="944"
+                alt=""
+              >
+
+              <div class="hide"></div>
+
+            </div>
+
+          </div>
 
 
-<script>
+          <div class="clear divider">&nbsp;</div>
 
-function createAccount(event) {
 
-    event.preventDefault();
+          <div class="grid_12" id="homepagesearch">
 
-    const username =
-        document.getElementById("username").value.trim();
+            <div class="grid_9 push_3 alpha">
 
-    const password =
-        document.getElementById("password").value;
+              <fieldset>
+              </fieldset>
 
-    const password2 =
-        document.getElementById("password2").value;
+            </div>
 
-    if (password !== password2) {
-        alert("Your passwords do not match.");
-        return;
-    }
+          </div>
 
-    alert(
-        "Welcome to LittleBigAdventure, " +
-        username +
-        "!"
-    );
-}
 
-</script>
+          <div class="clear divider">&nbsp;</div>
+
+        </div>
+
+
+        <div class="container container_12">
+
+
+          <!-- QUICK LINKS -->
+
+          <div
+            class="grid_3 paddv panel popit"
+            id="pnl-oneclick"
+          >
+
+            <h4>
+              Quick Links
+              <span class="icon">&nbsp;</span>
+            </h4>
+
+            <ul class="paddh smlbutton">
+
+              <li>
+                <a class="button" href="/post">
+                  All Posts
+                </a>
+              </li>
+
+              <li>
+                <a class="button" href="/projects">
+                  Projects (Comming Soon)
+                </a>
+              </li>
+
+              <li>
+                <a class="button" href="/fav_sites">
+                  Favourite Sites (Comming Soon)
+                </a>
+              </li>
+
+              <li>
+                <a class="button" href="/about_me">
+                  About Me (Comming Soon)
+                </a>
+              </li>
+
+              <li>
+                <a class="button" href="/add_site">
+                  Add My Site!
+                </a>
+              </li>
+
+            </ul>
+
+          </div>
+
+
+          <!-- NEWEST POSTS -->
+
+          <div
+            class="grid_3 popit paddv panel"
+            id="pnl-recentactivity"
+          >
+
+            <h4>
+
+              <a
+                href="/posts"
+                title="Newest blog posts!"
+              >
+                Newest Posts
+              </a>
+
+              <span class="icon">&nbsp;</span>
+
+            </h4>
+
+            <h5>
+              <span></span>
+            </h5>
+
+            <ol class="levellist">
+
+              <li>
+
+                <a
+                  class="badge"
+                  href="/post/newest_0"
+                >
+
+                  <img
+                    alt=""
+                    height="50"
+                    src="/images/icons/posts/newest_0.png"
+                    width="50"
+                  >
+
+                </a>
+
+                <a
+                  class="name"
+                  href="/post/newest_0"
+                >
+
+                  <div id="update_0">
+                    Loading Name...
+                  </div>
+
+                  <script src="newest_update.js"></script>
+
+                </a>
+
+              </li>
+
+
+              <li>
+
+                <a
+                  class="badge"
+                  href="/post/newest_1"
+                >
+
+                  <img
+                    alt=""
+                    height="50"
+                    src="images/icons/posts/newest_1.png"
+                    width="50"
+                  >
+
+                </a>
+
+                <a
+                  class="name"
+                  href="/post/newest_1"
+                >
+
+                  <div id="update_1">
+                    Loading Name...
+                  </div>
+
+                  <script src="newest_update.js"></script>
+
+                </a>
+
+              </li>
+
+
+              <li>
+
+                <a
+                  class="badge"
+                  href="/post/newest_2"
+                >
+
+                  <img
+                    alt=""
+                    height="50"
+                    src="/images/icons/posts/newest_2.png"
+                    width="50"
+                  >
+
+                </a>
+
+                <a
+                  class="name"
+                  href="/post/newest_2"
+                >
+
+                  <div id="update_2">
+                    Loading Name...
+                  </div>
+
+                  <script src="newest_update.js"></script>
+
+                </a>
+
+              </li>
+
+
+              <li>
+
+                <a
+                  class="badge"
+                  href="/post/newest_3"
+                >
+
+                  <img
+                    alt=""
+                    height="50"
+                    src="/images/icons/posts/newest_3.png"
+                    width="50"
+                  >
+
+                </a>
+
+                <a
+                  class="name"
+                  href="/post/newest_3"
+                >
+
+                  <div id="update_3">
+                    Loading Name...
+                  </div>
+
+                  <script src="newest_update.js"></script>
+
+                </a>
+
+              </li>
+
+            </ol>
+
+          </div>
+
+
+          <!-- TODO -->
+
+          <div
+            class="grid_3 popit paddv panel"
+            id="pnl-trendinglvls"
+          >
+
+            <h4>
+
+              <a href="/todo" title="">
+                Todo
+              </a>
+
+              <span class="icon">&nbsp;</span>
+
+            </h4>
+
+            <ul class="textlist">
+
+              <li>
+                Finish Favorite Sites Page
+              </li>
+
+              <li>
+                Add chatroom
+              </li>
+
+              <li>
+                Add community art page
+              </li>
+
+              <li>
+                Fix Icons
+              </li>
+
+              <li>
+                Fix Fonts
+              </li>
+
+            </ul>
+
+          </div>
+
+
+          <!-- FAVOURITE SITES -->
+
+          <div
+            class="grid_3 popit paddv panel"
+            id="pnl-mmpicks"
+          >
+
+            <h4>
+
+              <a
+                href="/fav_sites"
+                title="These are some of my favourite sites the community has made!."
+              >
+                Favourite Sites
+              </a>
+
+              <span class="icon">&nbsp;</span>
+
+            </h4>
+
+            <ol class="textlist">
+
+              <li>
+
+                <a
+                  target="_blank"
+                  href="https://melonking.net"
+                >
+
+                  <img
+                    alt="Visit Melonking.Net!"
+                    src="https://melonking.net/images/badges/MELON-BADGE-2.GIF"
+                    style="image-rendering:pixelated"
+                  >
+
+                </a>
+
+              </li>
+
+            </ol>
+
+          </div>
+
+
+        </div>
+
+      </div>
+
+
+      <div class="clear divider">&nbsp;</div>
+
+
+      <!-- FOOTER -->
+
+      <div class="footer">
+
+        <div class="container container_12">
+
+          <div class="grid_12">
+
+            <div class="grid_6 alpha">
+
+              <ul id="sitemap">
+
+                <li class="loggedin">
+
+                  <a href="javascript:feedback_widget.show()">
+                    Feedback
+                  </a>
+
+                </li>
+
+              </ul>
+
+            </div>
+
+
+            <div class="grid_6 omega">
+
+              <ul id="logos">
+                <!-- can add extra logos here -->
+              </ul>
+
+            </div>
+
+
+            <div class="grid_12 alpha omega paddb">
+
+              <small>
+              note: The sackboy character and the site design was orginally created my sony and sumo digital
+                 All property belongs to there respective owners if sony or sumo digital wants this taken down 
+                 Make a post about it if your sony or sumo I only own the client and Name and the server not 
+                 the stuff sony and sumo owns also shoutout to sony and sumo and media for creating sackboy
+                 and LittleBigPlanet  Thanks for reading
+              </small>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <link
+    href="/css/flood.css"
+    rel="stylesheet"
+    type="text/css"
+    media="all"
+  >
+
+  <script src="/scripts/flood.js"></script>
 
 </body>
+
 </html>
 ```
