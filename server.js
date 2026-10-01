@@ -202,7 +202,7 @@ app.use((req, res) => {
 });
 
 // ==================================================
-// START
+// START SERVER
 // ==================================================
 
 const PORT = process.env.PORT || 10000;
@@ -210,7 +210,7 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log("========================================");
   console.log("LittleBigAdventure server started");
-  console.log(`Port: ${PORT}`);
+  console.log("Port: " + PORT);
   console.log("Firebase Admin: connected");
   console.log("========================================");
 });
