@@ -1,6 +1,7 @@
 {
   "name": "littlebigadventure",
   "version": "1.0.0",
+  "description": "LittleBigAdventure community platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
