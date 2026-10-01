@@ -1,991 +1,388 @@
-
-<!DOCTYPE html>
-<html lang="en">
-
-  <head>
-
-    <script src=""></script>
-
-    <script>
-      if (typeof globalSiteSettings !== 'undefined') {
-        document.title = globalSiteSettings.name;
-      }
-
-    </script>
-
-    <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
-    <meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
-    <meta content="LittleBigAdventure" property="og:site_name">
-    <meta content="article" property="og:type">
-    <meta content="https://littlebigadventure.onrender.com/" property="og:url">
-    <link href="https://littlebigadventure.onrender.com/" rel="canonical">
-
-    <meta content="index,follow,archive" name="robots">
-    <meta content="LittleBigAdventure" name="title">
-    <meta content="LittleBigPlanet, Little Big Planet, LittleBigPlanet 2, Community, Levels, LBP.me, Sackboy, PlayStation, PS3, Media Molecule, Sony" name="keywords">
-    <meta content="Browse and discover LittleBigAdventure levels" name="description">
-    <meta content="Browse and discover LittleBigAdventure levels" property="og:description">
-    <meta content="LittleBigAdventure" property="og:title">
-    <meta content="/web/20110722172609im_/http://lbp.me/" property="og:image">
-
-    <!-- LBP-DOT-ME-STYLEE -->
-    <link href="https://djpieces.neocities.org/css/home_page.css" media="all" rel="stylesheet" type="text/css">
-
-    <!-- SCRIPTZ -->
-    <script type="text/javascript">
-      if (navigator.userAgent.match(/PlayStation/i)) {
-        document.write(
-          '<scr' +
-          'ipt type="text/javascript" src="https://web.archive.org/web/20110722172609/http://i.lbp.me/js/jquery/jquery-1.4.0.min.js"></scr' +
-          'ipt>'
-        );
-      } else {
-        document.write(
-          '<scr' +
-          'ipt type="text/javascript" src="https://web.archive.org/web/20110722172609/http://i.lbp.me/js/jquery/jquery-1.4.4.min.js"></scr' +
-          'ipt>'
-        );
-      }
-
-    </script>
-
-    <!-- icons -->
-    <link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="shortcut icon" type="image/x-icon">
-
-    <!-- iOS + Android icons -->
-    <link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="apple-touch-startup-image">
-    <link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="apple-touch-icon" title="LBP.me" type="image/png">
-
-    <!-- AIIIIII-EEE! -->
-    <!--[if lte IE 7]>
-<link href="http://i.lbp.me/css/style.ie7.css" media="all" rel="stylesheet" type="text/css">
-<![endif]-->
-
-    <!--[if lte IE 8]>
-<link href="http://i.lbp.me/css/style.ie8.css" media="all" rel="stylesheet" type="text/css">
-<![endif]-->
-
-    <!--[if lte IE 9]>
-<link href="http://i.lbp.me/css/style.ie9.css" media="all" rel="stylesheet" type="text/css">
-<![endif]-->
-
-  </head>
-
-  <body>
-
-    <div id="makebelieve">
-      <span class="hide">&nbsp;</span>
-    </div>
-
-    <div id="topbar">
-
-      <div class="container_12">
-
-        <div class="grid_12">
-
-          <div class="grid_4 alpha">
-
-            <div id="switchbuttons">
-
-              <!-- Home button with LBP image -->
-              <a class="Home" href="https://djpieces.neocities.org/" style="
-                display:flex;
-                align-items:center;
-                gap:10px;
-                position:relative;
-                top:-8px;
-              ">
-
-                <img src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png" alt="" style="
-                  height:55px;
-                  width:auto;
-                  object-fit:contain;
-                ">
-
-                <span> </span>
-
-              </a>
-
-            </div>
-
-          </div>
-
-          <div class="grid_8 omega">
-
-            <div id="mainmenu">
-
-              <ul class="loggedin" id="mm-options" style="display: none">
-
-                <li id="mm-options-trigger">
-
-                  <a class="a" href="#">
-                    Options
-                  </a>
-
-                  <ul>
-
-                    <li id="mm-dashboard">
-                      <a href="/web/20110722172609/http://lbp.me/" title="Dashboard">
-                        Dashboard
-                      </a>
-                    </li>
-
-                    <li id="mm-profile">
-                      <a href="/web/20110722172609/http://lbp.me/me" title="My profile">
-                        My profile
-                      </a>
-                    </li>
-
-                    <li id="mm-queue">
-                      <a href="/web/20110722172609/http://lbp.me/me/queue" title="My queue">
-                        My queue
-                      </a>
-                    </li>
-
-                    <li id="mm-privacysettings">
-                      <a href="/web/20110722172609/http://lbp.me/privacy_settings" title="Web Privacy Settings">
-                        Web Privacy Settings
-                      </a>
-                    </li>
-
-                    <li id="mm-settings">
-                      <a href="/web/20110722172609/http://lbp.me/settings" title="Settings">
-                        Settings
-                      </a>
-                    </li>
-
-                    <li id="mm-signout">
-                      <a href="/web/20110722172609/http://lbp.me/~logout" title="Sign out">
-                        Sign out
-                      </a>
-                    </li>
-
-                  </ul>
-
-                </li>
-
-              </ul>
-
-              <ul class="loggedout" id="accountmenu" style="display:flex; align-items:center; gap:10px;">
-
-                <li>
-
-                  <span class="psntitle">
-
-                    <span class="logopsn" title="Digital Network"></span>
-
-                    DigitalNetwork
-
-                  </span>
-
-                </li>
-
-                <li>
-                  <a href="#" onclick="openAccountModal('signup'); return false;" title="Create a LittleBigAdventure account">
-                    Sign Up
-                  </a>
-                </li>
-
-                <li>
-                  <a href="#" onclick="openAccountModal('login'); return false;" title="Log in to LittleBigAdventure">
-                    Login
-                  </a>
-                </li>
-
-              </ul>
-
-            </div>
-
-          </div>
-
-          <div class="clear">&nbsp;</div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-
-    <div id="bgr">
-
-      <div id="bg">
-
-        <div class="clear divider">&nbsp;</div>
-
-        <div class="section">
-
-          <div class="container container_12">
-
-            <div class="container container_12">
-
-              <div class="grid_12" id="welcomeintro">
-
-                <img height="256" src="https://i.postimg.cc/0j1NgGw6/IMG-0713.jpg" width="944" alt="">
-
-                <div class="hide"></div>
-
-              </div>
-
-            </div>
-
-
-            <div class="clear divider">&nbsp;</div>
-
-
-            <div class="grid_12" id="homepagesearch">
-
-              <div class="grid_9 push_3 alpha">
-
-                <fieldset>
-                </fieldset>
-
-              </div>
-
-            </div>
-
-
-            <div class="clear divider">&nbsp;</div>
-
-          </div>
-
-
-          <div class="container container_12">
-
-
-            <!-- POSTS -->
-
-            <div class="grid_3 paddv panel popit" id="pnl-oneclick">
-
-              <h4>
-                Posts
-                <span class="icon">&nbsp;</span>
-              </h4>
-
-              <div id="postsPanel" style="padding:10px 12px 12px 12px;">
-
-                <div id="postsList" style="text-align:left;"></div>
-
-                <a class="button" href="#" onclick="openPostCreator(); return false;"
-                   style="display:inline-block; margin-top:10px;">
-                  Make a Post
-                </a>
-
-              </div>
-
-            </div>
-
-
-            <!-- NEWEST POSTS -->
-
-            <div class="grid_3 popit paddv panel" id="pnl-recentactivity">
-
-              <h4>
-                All Levels
-                <span class="icon">&nbsp;</span>
-              </h4>
-
-              <h5>
-                <span></span>
-              </h5>
-
-              <div id="newLevelsContainer" style="padding:10px 12px 12px 12px; text-align:center;">
-
-                <div id="noGameMessage" style="padding:10px 4px 14px 4px;">
-                  <strong>There is No Game</strong>
-                  <br>
-                  <span style="display:block; margin-top:6px;">
-                    Make one first!
-                  </span>
-                </div>
-
-                <div id="levelsList" style="display:none; text-align:left;"></div>
-
-                <a
-                  class="button"
-                  href="#"
-                  onclick="openLevelCreator(); return false;"
-                  style="display:inline-block; margin-top:8px;"
-                >
-                  Make Level
-                </a>
-
-              </div>
-
-            </div>
-
-
-            <!-- NEW PLAYERS -->
-
-            <div class="grid_3 popit paddv panel" id="pnl-trendinglvls">
-
-              <h4>
-                New Players
-                <span class="icon">&nbsp;</span>
-              </h4>
-
-              <div id="playersList" style="padding:10px 12px 12px 12px; text-align:left;"></div>
-
-            </div>
-
-
-            <!-- FAVOURITE SITES -->
-
-            <div class="grid_3 popit paddv panel" id="pnl-mmpicks">
-
-              <h4>
-
-                <a href="/fav_sites" title="These are some of my favourite sites the community has made!.">
-                  Favourite Sites
-                </a>
-
-                <span class="icon">&nbsp;</span>
-
-              </h4>
-
-              <ol class="textlist">
-
-                <li>
-
-                  <a target="_blank" href="https://melonking.net">
-
-                    <img alt="Visit Melonking.Net!" src="https://melonking.net/images/badges/MELON-BADGE-2.GIF" style="image-rendering:pixelated">
-
-                  </a>
-
-                </li>
-
-              </ol>
-
-            </div>
-
-
-          </div>
-
-        </div>
-
-
-        <div class="clear divider">&nbsp;</div>
-
-
-        <!-- FOOTER -->
-
-        <div class="footer">
-
-          <div class="container container_12">
-
-            <div class="grid_12">
-
-              <div class="grid_6 alpha">
-
-                <ul id="sitemap">
-
-                  <li class="loggedin">
-
-                    <a href="javascript:feedback_widget.show()">
-                      Feedback
-                    </a>
-
-                  </li>
-
-                </ul>
-
-              </div>
-
-
-              <div class="grid_6 omega">
-
-                <ul id="logos">
-                  <!-- can add extra logos here -->
-                </ul>
-
-              </div>
-
-
-              <div class="grid_12 alpha omega paddb">
-
-                <small>
-                  Hi ik ben cool hehe
-                </small>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-
-
-    <!-- ACCOUNT MODAL -->
-    <div id="accountModal" style="
-      display:none;
-      position:fixed;
-      inset:0;
-      z-index:99999;
-      background:rgba(0,0,0,.55);
-      align-items:center;
-      justify-content:center;
-    ">
-      <div class="popit" style="
-        width:420px;
-        max-width:90%;
-        padding:22px;
-        position:relative;
-        box-sizing:border-box;
-      ">
-        <a href="#" onclick="closeAccountModal(); return false;"
-           style="position:absolute; right:14px; top:10px; font-size:22px;">×</a>
-
-        <div id="signupBox">
-          <h2>Sign Up</h2>
-          <p>Create your LittleBigAdventure account.</p>
-
-          <label>Username</label>
-          <input id="signupUsername" type="text" style="width:100%; box-sizing:border-box;">
-
-          <label style="display:block; margin-top:10px;">Password</label>
-          <input id="signupPassword" type="password" style="width:100%; box-sizing:border-box;">
-
-          <label style="display:block; margin-top:10px;">Confirm Password</label>
-          <input id="signupConfirm" type="password" style="width:100%; box-sizing:border-box;">
-
-          <label style="display:block; margin-top:10px;">Email <small>(optional)</small></label>
-          <input id="signupEmail" type="email" style="width:100%; box-sizing:border-box;">
-
-          <p id="signupMessage" style="margin-top:10px;"></p>
-
-          <a class="button" href="#" onclick="createAccount(); return false;"
-             style="display:inline-block; margin-top:8px;">
-            Create Account
-          </a>
-
-          <a href="#" onclick="switchAccountModal('login'); return false;"
-             style="margin-left:10px;">
-            Already have an account?
-          </a>
-        </div>
-
-        <div id="loginBox" style="display:none;">
-          <h2>Login</h2>
-          <p>Log in to LittleBigAdventure.</p>
-
-          <label>Username</label>
-          <input id="loginUsername" type="text" style="width:100%; box-sizing:border-box;">
-
-          <label style="display:block; margin-top:10px;">Password</label>
-          <input id="loginPassword" type="password" style="width:100%; box-sizing:border-box;">
-
-          <p id="loginMessage" style="margin-top:10px;"></p>
-
-          <a class="button" href="#" onclick="loginAccount(); return false;"
-             style="display:inline-block; margin-top:8px;">
-            Login
-          </a>
-
-          <a href="#" onclick="switchAccountModal('signup'); return false;"
-             style="margin-left:10px;">
-            Create an account
-          </a>
-        </div>
-      </div>
-    </div>
-
-
-    <!-- MAKE POST MODAL -->
-    <div id="postModal" style="
-      display:none;
-      position:fixed;
-      inset:0;
-      z-index:99999;
-      background:rgba(0,0,0,.55);
-      align-items:center;
-      justify-content:center;
-    ">
-      <div class="popit" style="
-        width:420px;
-        max-width:90%;
-        padding:22px;
-        box-sizing:border-box;
-      ">
-        <h2>Make a Post</h2>
-        <p>Share something with the LittleBigAdventure community.</p>
-
-        <textarea id="postText" rows="6"
-          style="width:100%; box-sizing:border-box; resize:vertical;"
-          placeholder="Write your post..."></textarea>
-
-        <p id="postMessage" style="margin-top:10px;"></p>
-
-        <a class="button" href="#" onclick="createPost(); return false;"
-           style="display:inline-block; margin-top:8px;">
-          Post
-        </a>
-
-        <a href="#" onclick="closePostCreator(); return false;"
-           style="margin-left:10px;">
-          Cancel
-        </a>
-      </div>
-    </div>
-
-
-    <!-- MAKE LEVEL MODAL -->
-    <div id="levelModal" style="
-      display:none;
-      position:fixed;
-      inset:0;
-      z-index:99999;
-      background:rgba(0,0,0,.55);
-      align-items:center;
-      justify-content:center;
-    ">
-      <div class="popit" style="
-        width:420px;
-        max-width:90%;
-        padding:22px;
-        box-sizing:border-box;
-      ">
-        <h2>Make a Level</h2>
-        <p>Create your first LittleBigAdventure level.</p>
-        <p><strong>You need a LittleBigAdventure account to create a level.</strong></p>
-
-        <label>Level Name</label>
-        <input id="levelName" type="text" placeholder="My Adventure"
-               style="width:100%; box-sizing:border-box;">
-
-        <p id="levelMessage" style="margin-top:10px;"></p>
-
-        <a class="button" href="#" onclick="createLevel(); return false;"
-           style="display:inline-block; margin-top:8px;">
-          Create Level
-        </a>
-
-        <a href="#" onclick="closeLevelCreator(); return false;"
-           style="margin-left:10px;">
-          Cancel
-        </a>
-      </div>
-    </div>
-
-
-
-    <!-- LittleBigAdventure Firebase -->
-    <!-- Firebase is used on the server through Firebase Admin/Firestore.
-         The browser does not use the Firebase Web API key, so Auth cannot fail
-         with auth/api-key-not-valid. -->
-    <script>
-      const LBA_API = "/api";
-      let lbaCurrentUser = null;
-
-      async function lbaRequest(path, options) {
-        options = options || {};
-        options.headers = options.headers || {};
-        options.headers["Content-Type"] = "application/json";
-
-        const response = await fetch(LBA_API + path, {
-          ...options,
-          credentials: "same-origin"
-        });
-
-        let data = {};
-        try { data = await response.json(); } catch (_) {}
-
-        if (!response.ok) {
-          throw new Error(data.error || "Request failed.");
-        }
-
-        return data;
-      }
-
-      async function refreshAuth() {
-        try {
-          const result = await lbaRequest("/auth/me");
-          lbaCurrentUser = result.user || null;
-        } catch (_) {
-          lbaCurrentUser = null;
-        }
-
-        updateAccountMenu();
-        renderPlayers();
-      }
-
-      function escapeHtml(value) {
-        return String(value == null ? "" : value)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#039;");
-      }
-
-      function openAccountModal(type) {
-        document.getElementById("accountModal").style.display = "flex";
-        switchAccountModal(type);
-      }
-
-      function closeAccountModal() {
-        document.getElementById("accountModal").style.display = "none";
-      }
-
-      function switchAccountModal(type) {
-        document.getElementById("signupBox").style.display =
-          type === "signup" ? "block" : "none";
-
-        document.getElementById("loginBox").style.display =
-          type === "login" ? "block" : "none";
-      }
-
-      async function createAccount() {
-        var username = document.getElementById("signupUsername").value.trim();
-        var password = document.getElementById("signupPassword").value;
-        var confirm = document.getElementById("signupConfirm").value;
-        var email = document.getElementById("signupEmail").value.trim();
-        var message = document.getElementById("signupMessage");
-
-        if (!username || !password || !confirm) {
-          message.textContent = "Please fill in the required fields.";
-          return;
-        }
-
-        if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
-          message.textContent = "Username must be 3-24 characters and use letters, numbers, _, . or -.";
-          return;
-        }
-
-        if (password.length < 6) {
-          message.textContent = "Password must be at least 6 characters.";
-          return;
-        }
-
-        if (password !== confirm) {
-          message.textContent = "Passwords do not match.";
-          return;
-        }
-
-        message.textContent = "Creating account...";
-
-        try {
-          const result = await lbaRequest("/auth/signup", {
-            method: "POST",
-            body: JSON.stringify({ username, password, email: email || null })
-          });
-
-          lbaCurrentUser = result.user || null;
-          message.textContent = "Account created!";
-
-          setTimeout(function() {
-            closeAccountModal();
-            updateAccountMenu();
-            renderPlayers();
-          }, 500);
-        } catch (error) {
-          console.error(error);
-          message.textContent = error.message || "Could not create account.";
-        }
-      }
-
-      async function loginAccount() {
-        var username = document.getElementById("loginUsername").value.trim();
-        var password = document.getElementById("loginPassword").value;
-        var message = document.getElementById("loginMessage");
-
-        if (!username || !password) {
-          message.textContent = "Enter your username and password.";
-          return;
-        }
-
-        message.textContent = "Logging in...";
-
-        try {
-          const result = await lbaRequest("/auth/login", {
-            method: "POST",
-            body: JSON.stringify({ username, password })
-          });
-
-          lbaCurrentUser = result.user || null;
-          message.textContent = "Logged in!";
-
-          setTimeout(function() {
-            closeAccountModal();
-            updateAccountMenu();
-            renderPlayers();
-          }, 500);
-        } catch (error) {
-          console.error(error);
-          message.textContent = error.message || "Incorrect username or password.";
-        }
-      }
-
-      async function getCurrentProfile() {
-        if (!lbaCurrentUser) return null;
-        try {
-          const result = await lbaRequest("/profile/me");
-          return result.profile || null;
-        } catch (error) {
-          console.error(error);
-          return null;
-        }
-      }
-
-      async function renderPlayers() {
-        var container = document.getElementById("playersList");
-        if (!container) return;
-
-        if (!lbaCurrentUser) {
-          container.innerHTML = "<p>Sign in to see your player profile.</p>";
-          return;
-        }
-
-        var profile = await getCurrentProfile();
-        if (!profile) {
-          container.innerHTML = "<p>Could not load your profile.</p>";
-          return;
-        }
-
-        container.innerHTML =
-          '<div style="padding:8px 4px;">' +
-          "<strong>" + escapeHtml(profile.username || "Player") + "</strong>" +
-          "<br><small>You are signed in.</small>" +
-          "</div>";
-      }
-
-      async function renderPosts() {
-        var container = document.getElementById("postsList");
-        if (!container) return;
-
-        container.innerHTML = "<p>Loading posts...</p>";
-
-        try {
-          var result = await lbaRequest("/posts");
-          var posts = result.posts || [];
-
-          if (!posts.length) {
-            container.innerHTML = "<p>No posts yet.</p>";
-            return;
-          }
-
-          container.innerHTML = posts.map(function(post) {
-            return '<div style="padding:8px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
-              "<strong>" + escapeHtml(post.author || post.username || "Player") + "</strong>" +
-              '<p style="margin:4px 0 0 0;">' + escapeHtml(post.text || "") + "</p>" +
-              "</div>";
-          }).join("");
-        } catch (error) {
-          console.error(error);
-          container.innerHTML = "<p>Could not load posts.</p>";
-        }
-      }
-
-      function openPostCreator() {
-        if (!lbaCurrentUser) {
-          openAccountModal("login");
-          document.getElementById("loginMessage").textContent =
-            "You need an account and must be logged in to make a post.";
-          return;
-        }
-
-        document.getElementById("postModal").style.display = "flex";
-        document.getElementById("postText").value = "";
-        document.getElementById("postMessage").textContent = "";
-        document.getElementById("postText").focus();
-      }
-
-      function closePostCreator() {
-        document.getElementById("postModal").style.display = "none";
-      }
-
-      async function createPost() {
-        var text = document.getElementById("postText").value.trim();
-        var message = document.getElementById("postMessage");
-
-        if (!lbaCurrentUser) {
-          message.textContent = "You need to be logged in.";
-          return;
-        }
-
-        if (!text) {
-          message.textContent = "Write something first.";
-          return;
-        }
-
-        if (text.length > 1000) {
-          message.textContent = "Post is too long.";
-          return;
-        }
-
-        message.textContent = "Posting...";
-
-        try {
-          await lbaRequest("/posts", {
-            method: "POST",
-            body: JSON.stringify({ text })
-          });
-
-          message.textContent = "Post created!";
-          setTimeout(function() {
-            closePostCreator();
-            renderPosts();
-          }, 500);
-        } catch (error) {
-          console.error(error);
-          message.textContent = error.message || "Could not create post.";
-        }
-      }
-
-      async function updateAccountMenu() {
-        var menu = document.getElementById("accountmenu");
-        if (!menu) return;
-
-        if (!lbaCurrentUser) {
-          menu.innerHTML =
-            '<li><span class="psntitle">DigitalNetwork</span></li>' +
-            '<li><a href="#" onclick="openAccountModal(\'signup\'); return false;">Sign Up</a></li>' +
-            '<li><a href="#" onclick="openAccountModal(\'login\'); return false;">Login</a></li>';
-          return;
-        }
-
-        menu.innerHTML =
-          '<li><span class="psntitle">DigitalNetwork</span></li>' +
-          '<li><strong style="padding:0 8px;">' + escapeHtml(lbaCurrentUser.username || "Player") + "</strong></li>" +
-          '<li><a href="#" onclick="logoutAccount(); return false;">Logout</a></li>';
-      }
-
-      async function logoutAccount() {
-        try {
-          await lbaRequest("/auth/logout", { method: "POST", body: "{}" });
-        } catch (error) {
-          console.error(error);
-        }
-
-        lbaCurrentUser = null;
-        updateAccountMenu();
-        renderPlayers();
-      }
-
-      function openLevelCreator() {
-        if (!lbaCurrentUser) {
-          openAccountModal("login");
-          document.getElementById("loginMessage").textContent =
-            "You need an account and must be logged in to make a level.";
-          return;
-        }
-
-        document.getElementById("levelModal").style.display = "flex";
-        document.getElementById("levelMessage").textContent = "";
-        document.getElementById("levelName").value = "";
-        document.getElementById("levelName").focus();
-      }
-
-      function closeLevelCreator() {
-        document.getElementById("levelModal").style.display = "none";
-      }
-
-      async function renderLevels() {
-        var empty = document.getElementById("noGameMessage");
-        var list = document.getElementById("levelsList");
-        if (!empty || !list) return;
-
-        empty.innerHTML = "<strong>Loading levels...</strong>";
-        empty.style.display = "block";
-        list.style.display = "none";
-
-        try {
-          var result = await lbaRequest("/levels");
-          var levels = result.levels || [];
-
-          if (!levels.length) {
-            empty.innerHTML =
-              "<strong>There is No Game</strong>" +
-              '<br><span style="display:block;margin-top:6px;">Make one first!</span>';
-            return;
-          }
-
-          empty.style.display = "none";
-          list.style.display = "block";
-
-          list.innerHTML = levels.map(function(level) {
-            var title = level.title || level.name || "Untitled Level";
-            var creator = level.creator || level.username || "Unknown Player";
-            return '<div style="padding:9px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
-              '<a href="/level.html?id=' + encodeURIComponent(level.id || "") + '">' +
-              "<strong>" + escapeHtml(title) + "</strong></a>" +
-              "<br><small>by " + escapeHtml(creator) + "</small>" +
-              "</div>";
-          }).join("");
-        } catch (error) {
-          console.error(error);
-          empty.innerHTML = "<strong>Could not load levels.</strong>";
-          list.innerHTML = "";
-        }
-      }
-
-      async function createLevel() {
-        var name = document.getElementById("levelName").value.trim();
-        var message = document.getElementById("levelMessage");
-
-        if (!lbaCurrentUser) {
-          message.textContent = "You need to be logged in.";
-          return;
-        }
-
-        if (!name) {
-          message.textContent = "Give your level a name first.";
-          return;
-        }
-
-        if (name.length > 80) {
-          message.textContent = "Level name is too long.";
-          return;
-        }
-
-        message.textContent = "Creating level...";
-
-        try {
-          var result = await lbaRequest("/levels", {
-            method: "POST",
-            body: JSON.stringify({ title: name, description: "" })
-          });
-
-          message.textContent = "Level created!";
-
-          setTimeout(function() {
-            closeLevelCreator();
-            renderLevels();
-            if (result.level && result.level.id) {
-              location.href = "/level.html?id=" + encodeURIComponent(result.level.id);
-            }
-          }, 500);
-        } catch (error) {
-          console.error(error);
-          message.textContent = error.message || "Could not create level.";
-        }
-      }
-
-      document.addEventListener("DOMContentLoaded", function() {
-        refreshAuth();
-        renderLevels();
-        renderPosts();
+const express = require("express");
+const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const { initializeApp, cert, getApps } = require("firebase-admin/app");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+
+// --------------------------------------------------
+// Firebase Admin
+// --------------------------------------------------
+
+if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
+}
+
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+} catch (error) {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
+}
+
+const firebaseApp = getApps().length
+  ? getApps()[0]
+  : initializeApp({ credential: cert(serviceAccount) });
+
+const db = getFirestore(firebaseApp);
+
+// A fallback is generated per server process. Set LBA_SESSION_SECRET in
+// Render for sessions to survive restarts/deploys.
+const SESSION_SECRET = process.env.LBA_SESSION_SECRET || crypto.randomBytes(48).toString("hex");
+const SESSION_COOKIE = "lba_session";
+
+// --------------------------------------------------
+// Express
+// --------------------------------------------------
+
+const app = express();
+app.use(express.json({ limit: "256kb" }));
+app.use(express.urlencoded({ extended: true, limit: "256kb" }));
+app.use(express.static(__dirname));
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+function cleanString(value, max = 1000) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, max);
+}
+
+function getCookie(req, name) {
+  const header = req.headers.cookie || "";
+  const parts = header.split(";").map(v => v.trim());
+  for (const part of parts) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (decodeURIComponent(part.slice(0, eq)) === name) {
+      return decodeURIComponent(part.slice(eq + 1));
+    }
+  }
+  return null;
+}
+
+function setSessionCookie(res, token) {
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
+  );
+}
+
+function clearSessionCookie(res) {
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+  );
+}
+
+function makeSession(userId) {
+  return jwt.sign({ uid: userId }, SESSION_SECRET, { expiresIn: "30d" });
+}
+
+async function getUserFromRequest(req) {
+  const token = getCookie(req, SESSION_COOKIE);
+  if (!token) return null;
+
+  try {
+    const decoded = jwt.verify(token, SESSION_SECRET);
+    if (!decoded.uid) return null;
+
+    const snap = await db.collection("users").doc(decoded.uid).get();
+    if (!snap.exists) return null;
+
+    return { id: snap.id, ...snap.data() };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function requireAuth(req, res, next) {
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ error: "You must be logged in" });
+  }
+  req.user = user;
+  next();
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    username: user.username || "Player",
+    email: user.email || null,
+    createdAt: user.createdAt || null
+  };
+}
+
+// --------------------------------------------------
+// Status / Firebase test
+// --------------------------------------------------
+
+app.get("/api/status", (req, res) => {
+  res.json({ online: true, service: "LittleBigAdventure", firebase: true });
+});
+
+app.get("/api/firebase-test", async (req, res) => {
+  try {
+    const testRef = db.collection("_system").doc("server");
+    await testRef.set({
+      online: true,
+      service: "LittleBigAdventure",
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    const snapshot = await testRef.get();
+    res.json({ connected: true, firestore: true, data: snapshot.data() });
+  } catch (error) {
+    console.error("Firebase error:", error);
+    res.status(500).json({ connected: false, firestore: false, error: "Firebase connection failed" });
+  }
+});
+
+// --------------------------------------------------
+// Account auth - stored in Firestore, no browser Firebase API key needed
+// --------------------------------------------------
+
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const username = cleanString(req.body.username, 24);
+    const password = typeof req.body.password === "string" ? req.body.password : "";
+    const email = cleanString(req.body.email, 254) || null;
+
+    if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
+      return res.status(400).json({ error: "Username must be 3-24 characters and use letters, numbers, _, . or -." });
+    }
+    if (password.length < 6 || password.length > 200) {
+      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+
+    const usernameKey = username.toLowerCase();
+    const usernameRef = db.collection("usernames").doc(usernameKey);
+    const existing = await usernameRef.get();
+    if (existing.exists) {
+      return res.status(409).json({ error: "That username is already taken." });
+    }
+
+    const userRef = db.collection("users").doc();
+    const passwordHash = await bcrypt.hash(password, 12);
+    const now = FieldValue.serverTimestamp();
+
+    await db.runTransaction(async transaction => {
+      const taken = await transaction.get(usernameRef);
+      if (taken.exists) throw new Error("USERNAME_TAKEN");
+
+      transaction.set(userRef, {
+        username,
+        usernameLower: usernameKey,
+        email,
+        passwordHash,
+        createdAt: now,
+        updatedAt: now
       });
 
-      window.addEventListener("click", function(event) {
-        var accountModal = document.getElementById("accountModal");
-        var levelModal = document.getElementById("levelModal");
-        var postModal = document.getElementById("postModal");
-
-        if (event.target === accountModal) closeAccountModal();
-        if (event.target === levelModal) closeLevelCreator();
-        if (event.target === postModal) closePostCreator();
+      transaction.set(usernameRef, {
+        userId: userRef.id,
+        createdAt: now
       });
-    </script>
+    });
 
+    setSessionCookie(res, makeSession(userRef.id));
+    res.json({ success: true, user: { id: userRef.id, username, email } });
+  } catch (error) {
+    if (error.message === "USERNAME_TAKEN") {
+      return res.status(409).json({ error: "That username is already taken." });
+    }
+    console.error("Signup error:", error);
+    res.status(500).json({ error: "Could not create account" });
+  }
+});
 
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const username = cleanString(req.body.username, 24);
+    const password = typeof req.body.password === "string" ? req.body.password : "";
 
-  </body>
+    const usernameSnap = await db.collection("usernames").doc(username.toLowerCase()).get();
+    if (!usernameSnap.exists) {
+      return res.status(401).json({ error: "Incorrect username or password." });
+    }
 
-</html>
+    const userId = usernameSnap.data().userId;
+    const userSnap = await db.collection("users").doc(userId).get();
+    if (!userSnap.exists) {
+      return res.status(401).json({ error: "Incorrect username or password." });
+    }
+
+    const user = { id: userSnap.id, ...userSnap.data() };
+    const valid = await bcrypt.compare(password, user.passwordHash || "");
+    if (!valid) {
+      return res.status(401).json({ error: "Incorrect username or password." });
+    }
+
+    setSessionCookie(res, makeSession(user.id));
+    res.json({ success: true, user: publicUser(user) });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Could not log in" });
+  }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  clearSessionCookie(res);
+  res.json({ success: true });
+});
+
+app.get("/api/auth/me", async (req, res) => {
+  const user = await getUserFromRequest(req);
+  if (!user) return res.status(401).json({ authenticated: false });
+  res.json({ authenticated: true, user: publicUser(user) });
+});
+
+// --------------------------------------------------
+// Profile
+// --------------------------------------------------
+
+app.post("/api/profile", requireAuth, async (req, res) => {
+  try {
+    const username = cleanString(req.body.username, 24);
+    const email = cleanString(req.body.email, 254) || null;
+
+    const data = { updatedAt: FieldValue.serverTimestamp() };
+    if (username) data.username = username;
+    if (email !== undefined) data.email = email;
+
+    await db.collection("users").doc(req.user.id).set(data, { merge: true });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Profile write error:", error);
+    res.status(500).json({ error: "Failed to save profile" });
+  }
+});
+
+app.get("/api/profile/me", requireAuth, async (req, res) => {
+  res.json({ profile: publicUser(req.user) });
+});
+
+// --------------------------------------------------
+// Levels
+// --------------------------------------------------
+
+app.post("/api/levels", requireAuth, async (req, res) => {
+  try {
+    const title = cleanString(req.body.title || req.body.name, 80);
+    const description = cleanString(req.body.description, 1000);
+    if (!title) return res.status(400).json({ error: "Level title is required" });
+
+    const ref = db.collection("levels").doc();
+    const data = {
+      title,
+      description,
+      creatorId: req.user.id,
+      creator: req.user.username,
+      plays: 0,
+      hearts: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    await ref.set(data);
+    res.json({ success: true, level: { id: ref.id, ...data } });
+  } catch (error) {
+    console.error("Level create error:", error);
+    res.status(500).json({ error: "Failed to create level" });
+  }
+});
+
+app.get("/api/levels", async (req, res) => {
+  try {
+    const snap = await db.collection("levels").orderBy("createdAt", "desc").limit(30).get();
+    const levels = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ levels });
+  } catch (error) {
+    console.error("Level list error:", error);
+    res.status(500).json({ error: "Failed to load levels" });
+  }
+});
+
+app.get("/api/levels/:id", async (req, res) => {
+  try {
+    const snap = await db.collection("levels").doc(req.params.id).get();
+    if (!snap.exists) return res.status(404).json({ error: "Level not found" });
+    res.json({ level: { id: snap.id, ...snap.data() } });
+  } catch (error) {
+    console.error("Level read error:", error);
+    res.status(500).json({ error: "Failed to load level" });
+  }
+});
+
+app.patch("/api/levels/:id", requireAuth, async (req, res) => {
+  try {
+    const ref = db.collection("levels").doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "Level not found" });
+    if (snap.data().creatorId !== req.user.id) return res.status(403).json({ error: "Not your level" });
+
+    const update = { updatedAt: FieldValue.serverTimestamp() };
+    if (req.body.title !== undefined) update.title = cleanString(req.body.title, 80);
+    if (req.body.description !== undefined) update.description = cleanString(req.body.description, 1000);
+    await ref.update(update);
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Level update error:", error);
+    res.status(500).json({ error: "Failed to update level" });
+  }
+});
+
+// --------------------------------------------------
+// Posts
+// --------------------------------------------------
+
+app.post("/api/posts", requireAuth, async (req, res) => {
+  try {
+    const text = cleanString(req.body.text, 1000);
+    if (!text) return res.status(400).json({ error: "Post text is required" });
+
+    const ref = db.collection("posts").doc();
+    await ref.set({
+      text,
+      authorId: req.user.id,
+      author: req.user.username,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    res.json({ success: true, post: { id: ref.id, text, author: req.user.username } });
+  } catch (error) {
+    console.error("Post create error:", error);
+    res.status(500).json({ error: "Failed to create post" });
+  }
+});
+
+app.get("/api/posts", async (req, res) => {
+  try {
+    const snap = await db.collection("posts").orderBy("createdAt", "desc").limit(30).get();
+    const posts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ posts });
+  } catch (error) {
+    console.error("Post list error:", error);
+    res.status(500).json({ error: "Failed to load posts" });
+  }
+});
+
+// --------------------------------------------------
+// 404
+// --------------------------------------------------
+
+app.use((req, res) => {
+  if (req.path.startsWith("/api/")) {
+    return res.status(404).json({ error: "API endpoint not found" });
+  }
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`LittleBigAdventure server running on port ${PORT}`);
+  console.log("Firebase Admin connected");
+});
