@@ -2,387 +2,883 @@ const express = require("express");
 const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-
-const { initializeApp, cert, getApps } = require("firebase-admin/app");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-
-// --------------------------------------------------
-// Firebase Admin
-// --------------------------------------------------
-
-if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
-}
-
-let serviceAccount;
-try {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-} catch (error) {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
-}
-
-const firebaseApp = getApps().length
-  ? getApps()[0]
-  : initializeApp({ credential: cert(serviceAccount) });
-
-const db = getFirestore(firebaseApp);
-
-// A fallback is generated per server process. Set LBA_SESSION_SECRET in
-// Render for sessions to survive restarts/deploys.
-const SESSION_SECRET = process.env.LBA_SESSION_SECRET || crypto.randomBytes(48).toString("hex");
-const SESSION_COOKIE = "lba_session";
-
-// --------------------------------------------------
-// Express
-// --------------------------------------------------
+const { Pool } = require("pg");
 
 const app = express();
-app.use(express.json({ limit: "256kb" }));
-app.use(express.urlencoded({ extended: true, limit: "256kb" }));
-app.use(express.static(__dirname));
+const PORT = process.env.PORT || 10000;
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+// ==================================================
+// DATABASE
+// ==================================================
 
-function cleanString(value, max = 1000) {
-  if (typeof value !== "string") return "";
-  return value.trim().slice(0, max);
+if (!process.env.DATABASE_URL) {
+  throw new Error("Missing DATABASE_URL");
 }
 
-function getCookie(req, name) {
-  const header = req.headers.cookie || "";
-  const parts = header.split(";").map(v => v.trim());
-  for (const part of parts) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (decodeURIComponent(part.slice(0, eq)) === name) {
-      return decodeURIComponent(part.slice(eq + 1));
-    }
-  }
-  return null;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false
+});
+
+app.set("trust proxy", 1);
+
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// ==================================================
+// DATABASE SETUP
+// ==================================================
+
+async function initDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username VARCHAR(32) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      email VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS profiles (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      display_name VARCHAR(64),
+      bio TEXT DEFAULT '',
+      avatar_url TEXT DEFAULT '',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS posts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      image_url TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS levels (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title VARCHAR(100) NOT NULL,
+      description TEXT DEFAULT '',
+      image_url TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sessions_token_hash_idx
+    ON sessions(token_hash);
+
+    CREATE INDEX IF NOT EXISTS posts_created_at_idx
+    ON posts(created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS levels_created_at_idx
+    ON levels(created_at DESC);
+  `);
+
+  console.log("Render PostgreSQL connected");
+}
+
+// ==================================================
+// SESSION HELPERS
+// ==================================================
+
+function hashToken(token) {
+  return crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+}
+
+function createToken() {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 function setSessionCookie(res, token) {
+  const secure =
+    process.env.NODE_ENV === "production"
+      ? "; Secure"
+      : "";
+
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
+    `lba_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure}`
   );
 }
 
 function clearSessionCookie(res) {
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+    "lba_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
   );
 }
 
-function makeSession(userId) {
-  return jwt.sign({ uid: userId }, SESSION_SECRET, { expiresIn: "30d" });
-}
+function getSessionToken(req) {
+  const cookieHeader = req.headers.cookie;
 
-async function getUserFromRequest(req) {
-  const token = getCookie(req, SESSION_COOKIE);
-  if (!token) return null;
-
-  try {
-    const decoded = jwt.verify(token, SESSION_SECRET);
-    if (!decoded.uid) return null;
-
-    const snap = await db.collection("users").doc(decoded.uid).get();
-    if (!snap.exists) return null;
-
-    return { id: snap.id, ...snap.data() };
-  } catch (_) {
+  if (!cookieHeader) {
     return null;
   }
+
+  const cookies = {};
+
+  cookieHeader.split(";").forEach((cookie) => {
+    const index = cookie.indexOf("=");
+
+    if (index === -1) {
+      return;
+    }
+
+    const key = cookie.slice(0, index).trim();
+    const value = cookie.slice(index + 1).trim();
+
+    cookies[key] = decodeURIComponent(value);
+  });
+
+  return cookies.lba_session || null;
+}
+
+// ==================================================
+// AUTH
+// ==================================================
+
+async function getUserFromRequest(req) {
+  const token = getSessionToken(req);
+
+  if (!token) {
+    return null;
+  }
+
+  const tokenHash = hashToken(token);
+
+  const result = await pool.query(
+    `
+    SELECT
+      u.id,
+      u.username,
+      u.email,
+      u.created_at
+    FROM sessions s
+    JOIN users u
+      ON u.id = s.user_id
+    WHERE s.token_hash = $1
+    `,
+    [tokenHash]
+  );
+
+  return result.rows[0] || null;
 }
 
 async function requireAuth(req, res, next) {
-  const user = await getUserFromRequest(req);
-  if (!user) {
-    return res.status(401).json({ error: "You must be logged in" });
-  }
-  req.user = user;
-  next();
-}
-
-function publicUser(user) {
-  return {
-    id: user.id,
-    username: user.username || "Player",
-    email: user.email || null,
-    createdAt: user.createdAt || null
-  };
-}
-
-// --------------------------------------------------
-// Status / Firebase test
-// --------------------------------------------------
-
-app.get("/api/status", (req, res) => {
-  res.json({ online: true, service: "LittleBigAdventure", firebase: true });
-});
-
-app.get("/api/firebase-test", async (req, res) => {
   try {
-    const testRef = db.collection("_system").doc("server");
-    await testRef.set({
+    const user = await getUserFromRequest(req);
+
+    if (!user) {
+      return res.status(401).json({
+        authenticated: false,
+        error: "Login required"
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error("Authentication error:", error);
+
+    res.status(500).json({
+      error: "Authentication failed"
+    });
+  }
+}
+
+// ==================================================
+// STATUS
+// ==================================================
+
+app.get("/api/status", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+
+    res.json({
       online: true,
       service: "LittleBigAdventure",
-      updatedAt: FieldValue.serverTimestamp()
-    }, { merge: true });
-    const snapshot = await testRef.get();
-    res.json({ connected: true, firestore: true, data: snapshot.data() });
+      database: true
+    });
   } catch (error) {
-    console.error("Firebase error:", error);
-    res.status(500).json({ connected: false, firestore: false, error: "Firebase connection failed" });
+    console.error("Database status error:", error);
+
+    res.status(500).json({
+      online: true,
+      service: "LittleBigAdventure",
+      database: false
+    });
   }
 });
 
-// --------------------------------------------------
-// Account auth - stored in Firestore, no browser Firebase API key needed
-// --------------------------------------------------
+// ==================================================
+// SIGN UP
+// ==================================================
 
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    const username = cleanString(req.body.username, 24);
-    const password = typeof req.body.password === "string" ? req.body.password : "";
-    const email = cleanString(req.body.email, 254) || null;
+    const {
+      username,
+      password,
+      email = ""
+    } = req.body;
 
-    if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
-      return res.status(400).json({ error: "Username must be 3-24 characters and use letters, numbers, _, . or -." });
-    }
-    if (password.length < 6 || password.length > 200) {
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
-    }
-
-    const usernameKey = username.toLowerCase();
-    const usernameRef = db.collection("usernames").doc(usernameKey);
-    const existing = await usernameRef.get();
-    if (existing.exists) {
-      return res.status(409).json({ error: "That username is already taken." });
+    if (!username || !password) {
+      return res.status(400).json({
+        error: "Username and password are required"
+      });
     }
 
-    const userRef = db.collection("users").doc();
+    if (username.length < 3 || username.length > 32) {
+      return res.status(400).json({
+        error: "Username must be between 3 and 32 characters"
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        error: "Password must be at least 6 characters"
+      });
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+      return res.status(400).json({
+        error: "Username contains invalid characters"
+      });
+    }
+
+    const existing = await pool.query(
+      "SELECT id FROM users WHERE LOWER(username) = LOWER($1)",
+      [username]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        error: "Username already exists"
+      });
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
-    const now = FieldValue.serverTimestamp();
 
-    await db.runTransaction(async transaction => {
-      const taken = await transaction.get(usernameRef);
-      if (taken.exists) throw new Error("USERNAME_TAKEN");
-
-      transaction.set(userRef, {
+    const userResult = await pool.query(
+      `
+      INSERT INTO users
+        (username, password_hash, email)
+      VALUES
+        ($1, $2, $3)
+      RETURNING id, username, email, created_at
+      `,
+      [
         username,
-        usernameLower: usernameKey,
-        email,
         passwordHash,
-        createdAt: now,
-        updatedAt: now
-      });
+        email || null
+      ]
+    );
 
-      transaction.set(usernameRef, {
-        userId: userRef.id,
-        createdAt: now
-      });
+    const user = userResult.rows[0];
+
+    await pool.query(
+      `
+      INSERT INTO profiles
+        (user_id, display_name)
+      VALUES
+        ($1, $2)
+      `,
+      [user.id, user.username]
+    );
+
+    const token = createToken();
+
+    await pool.query(
+      `
+      INSERT INTO sessions
+        (user_id, token_hash)
+      VALUES
+        ($1, $2)
+      `,
+      [user.id, hashToken(token)]
+    );
+
+    setSessionCookie(res, token);
+
+    res.json({
+      success: true,
+      user
     });
-
-    setSessionCookie(res, makeSession(userRef.id));
-    res.json({ success: true, user: { id: userRef.id, username, email } });
   } catch (error) {
-    if (error.message === "USERNAME_TAKEN") {
-      return res.status(409).json({ error: "That username is already taken." });
-    }
     console.error("Signup error:", error);
-    res.status(500).json({ error: "Could not create account" });
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to create account"
+    });
   }
 });
+
+// ==================================================
+// LOGIN
+// ==================================================
 
 app.post("/api/auth/login", async (req, res) => {
   try {
-    const username = cleanString(req.body.username, 24);
-    const password = typeof req.body.password === "string" ? req.body.password : "";
+    const {
+      username,
+      password
+    } = req.body;
 
-    const usernameSnap = await db.collection("usernames").doc(username.toLowerCase()).get();
-    if (!usernameSnap.exists) {
-      return res.status(401).json({ error: "Incorrect username or password." });
+    if (!username || !password) {
+      return res.status(400).json({
+        error: "Username and password are required"
+      });
     }
 
-    const userId = usernameSnap.data().userId;
-    const userSnap = await db.collection("users").doc(userId).get();
-    if (!userSnap.exists) {
-      return res.status(401).json({ error: "Incorrect username or password." });
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        username,
+        email,
+        password_hash,
+        created_at
+      FROM users
+      WHERE LOWER(username) = LOWER($1)
+      `,
+      [username]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        error: "Invalid username or password"
+      });
     }
 
-    const user = { id: userSnap.id, ...userSnap.data() };
-    const valid = await bcrypt.compare(password, user.passwordHash || "");
-    if (!valid) {
-      return res.status(401).json({ error: "Incorrect username or password." });
+    const user = result.rows[0];
+
+    const validPassword = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({
+        error: "Invalid username or password"
+      });
     }
 
-    setSessionCookie(res, makeSession(user.id));
-    res.json({ success: true, user: publicUser(user) });
+    await pool.query(
+      "DELETE FROM sessions WHERE user_id = $1",
+      [user.id]
+    );
+
+    const token = createToken();
+
+    await pool.query(
+      `
+      INSERT INTO sessions
+        (user_id, token_hash)
+      VALUES
+        ($1, $2)
+      `,
+      [user.id, hashToken(token)]
+    );
+
+    setSessionCookie(res, token);
+
+    delete user.password_hash;
+
+    res.json({
+      success: true,
+      user
+    });
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ error: "Could not log in" });
+
+    res.status(500).json({
+      success: false,
+      error: "Login failed"
+    });
   }
 });
 
-app.post("/api/auth/logout", (req, res) => {
-  clearSessionCookie(res);
-  res.json({ success: true });
+// ==================================================
+// LOGOUT
+// ==================================================
+
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const token = getSessionToken(req);
+
+    if (token) {
+      await pool.query(
+        "DELETE FROM sessions WHERE token_hash = $1",
+        [hashToken(token)]
+      );
+    }
+
+    clearSessionCookie(res);
+
+    res.json({
+      success: true
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Logout failed"
+    });
+  }
 });
+
+// ==================================================
+// CURRENT USER
+// ==================================================
 
 app.get("/api/auth/me", async (req, res) => {
-  const user = await getUserFromRequest(req);
-  if (!user) return res.status(401).json({ authenticated: false });
-  res.json({ authenticated: true, user: publicUser(user) });
-});
-
-// --------------------------------------------------
-// Profile
-// --------------------------------------------------
-
-app.post("/api/profile", requireAuth, async (req, res) => {
   try {
-    const username = cleanString(req.body.username, 24);
-    const email = cleanString(req.body.email, 254) || null;
+    const user = await getUserFromRequest(req);
 
-    const data = { updatedAt: FieldValue.serverTimestamp() };
-    if (username) data.username = username;
-    if (email !== undefined) data.email = email;
+    if (!user) {
+      return res.json({
+        authenticated: false,
+        user: null
+      });
+    }
 
-    await db.collection("users").doc(req.user.id).set(data, { merge: true });
-    res.json({ success: true });
+    res.json({
+      authenticated: true,
+      user
+    });
   } catch (error) {
-    console.error("Profile write error:", error);
-    res.status(500).json({ error: "Failed to save profile" });
+    console.error("Auth check error:", error);
+
+    res.status(500).json({
+      authenticated: false,
+      error: "Authentication check failed"
+    });
   }
 });
+
+// ==================================================
+// MY PROFILE
+// ==================================================
 
 app.get("/api/profile/me", requireAuth, async (req, res) => {
-  res.json({ profile: publicUser(req.user) });
-});
-
-// --------------------------------------------------
-// Levels
-// --------------------------------------------------
-
-app.post("/api/levels", requireAuth, async (req, res) => {
   try {
-    const title = cleanString(req.body.title || req.body.name, 80);
-    const description = cleanString(req.body.description, 1000);
-    if (!title) return res.status(400).json({ error: "Level title is required" });
+    const result = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.username,
+        u.email,
+        u.created_at,
+        p.display_name,
+        p.bio,
+        p.avatar_url
+      FROM users u
+      LEFT JOIN profiles p
+        ON p.user_id = u.id
+      WHERE u.id = $1
+      `,
+      [req.user.id]
+    );
 
-    const ref = db.collection("levels").doc();
-    const data = {
-      title,
-      description,
-      creatorId: req.user.id,
-      creator: req.user.username,
-      plays: 0,
-      hearts: 0,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp()
-    };
-
-    await ref.set(data);
-    res.json({ success: true, level: { id: ref.id, ...data } });
-  } catch (error) {
-    console.error("Level create error:", error);
-    res.status(500).json({ error: "Failed to create level" });
-  }
-});
-
-app.get("/api/levels", async (req, res) => {
-  try {
-    const snap = await db.collection("levels").orderBy("createdAt", "desc").limit(30).get();
-    const levels = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json({ levels });
-  } catch (error) {
-    console.error("Level list error:", error);
-    res.status(500).json({ error: "Failed to load levels" });
-  }
-});
-
-app.get("/api/levels/:id", async (req, res) => {
-  try {
-    const snap = await db.collection("levels").doc(req.params.id).get();
-    if (!snap.exists) return res.status(404).json({ error: "Level not found" });
-    res.json({ level: { id: snap.id, ...snap.data() } });
-  } catch (error) {
-    console.error("Level read error:", error);
-    res.status(500).json({ error: "Failed to load level" });
-  }
-});
-
-app.patch("/api/levels/:id", requireAuth, async (req, res) => {
-  try {
-    const ref = db.collection("levels").doc(req.params.id);
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(404).json({ error: "Level not found" });
-    if (snap.data().creatorId !== req.user.id) return res.status(403).json({ error: "Not your level" });
-
-    const update = { updatedAt: FieldValue.serverTimestamp() };
-    if (req.body.title !== undefined) update.title = cleanString(req.body.title, 80);
-    if (req.body.description !== undefined) update.description = cleanString(req.body.description, 1000);
-    await ref.update(update);
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Level update error:", error);
-    res.status(500).json({ error: "Failed to update level" });
-  }
-});
-
-// --------------------------------------------------
-// Posts
-// --------------------------------------------------
-
-app.post("/api/posts", requireAuth, async (req, res) => {
-  try {
-    const text = cleanString(req.body.text, 1000);
-    if (!text) return res.status(400).json({ error: "Post text is required" });
-
-    const ref = db.collection("posts").doc();
-    await ref.set({
-      text,
-      authorId: req.user.id,
-      author: req.user.username,
-      createdAt: FieldValue.serverTimestamp()
+    res.json({
+      profile: result.rows[0]
     });
-
-    res.json({ success: true, post: { id: ref.id, text, author: req.user.username } });
   } catch (error) {
-    console.error("Post create error:", error);
-    res.status(500).json({ error: "Failed to create post" });
+    console.error("Profile error:", error);
+
+    res.status(500).json({
+      error: "Failed to load profile"
+    });
   }
 });
+
+// ==================================================
+// UPDATE MY PROFILE
+// ==================================================
+
+app.post("/api/profile/me", requireAuth, async (req, res) => {
+  try {
+    const {
+      displayName = "",
+      bio = "",
+      avatarUrl = ""
+    } = req.body;
+
+    await pool.query(
+      `
+      UPDATE profiles
+      SET
+        display_name = $1,
+        bio = $2,
+        avatar_url = $3,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $4
+      `,
+      [
+        displayName,
+        bio,
+        avatarUrl,
+        req.user.id
+      ]
+    );
+
+    res.json({
+      success: true
+    });
+  } catch (error) {
+    console.error("Profile update error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to update profile"
+    });
+  }
+});
+
+// ==================================================
+// PUBLIC PROFILE
+// ==================================================
+
+app.get("/api/profile/:username", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.username,
+        u.created_at,
+        p.display_name,
+        p.bio,
+        p.avatar_url
+      FROM users u
+      LEFT JOIN profiles p
+        ON p.user_id = u.id
+      WHERE LOWER(u.username) = LOWER($1)
+      `,
+      [req.params.username]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "Player not found"
+      });
+    }
+
+    res.json({
+      profile: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Public profile error:", error);
+
+    res.status(500).json({
+      error: "Failed to load profile"
+    });
+  }
+});
+
+// ==================================================
+// NEW PLAYERS
+// ==================================================
+
+app.get("/api/players", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        u.username,
+        p.display_name,
+        p.avatar_url,
+        u.created_at
+      FROM users u
+      LEFT JOIN profiles p
+        ON p.user_id = u.id
+      ORDER BY u.created_at DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      players: result.rows
+    });
+  } catch (error) {
+    console.error("Players error:", error);
+
+    res.status(500).json({
+      error: "Failed to load players"
+    });
+  }
+});
+
+// ==================================================
+// POSTS
+// ==================================================
 
 app.get("/api/posts", async (req, res) => {
   try {
-    const snap = await db.collection("posts").orderBy("createdAt", "desc").limit(30).get();
-    const posts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json({ posts });
+    const result = await pool.query(`
+      SELECT
+        posts.id,
+        posts.content,
+        posts.image_url,
+        posts.created_at,
+        users.username,
+        profiles.display_name,
+        profiles.avatar_url
+      FROM posts
+      JOIN users
+        ON users.id = posts.user_id
+      LEFT JOIN profiles
+        ON profiles.user_id = users.id
+      ORDER BY posts.created_at DESC
+      LIMIT 50
+    `);
+
+    res.json({
+      posts: result.rows
+    });
   } catch (error) {
-    console.error("Post list error:", error);
-    res.status(500).json({ error: "Failed to load posts" });
+    console.error("Posts error:", error);
+
+    res.status(500).json({
+      error: "Failed to load posts"
+    });
   }
 });
 
-// --------------------------------------------------
-// 404
-// --------------------------------------------------
+// ==================================================
+// CREATE POST
+// ==================================================
 
-app.use((req, res) => {
-  if (req.path.startsWith("/api/")) {
-    return res.status(404).json({ error: "API endpoint not found" });
+app.post("/api/posts", requireAuth, async (req, res) => {
+  try {
+    const {
+      content,
+      imageUrl = ""
+    } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({
+        error: "Post cannot be empty"
+      });
+    }
+
+    if (content.length > 2000) {
+      return res.status(400).json({
+        error: "Post is too long"
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO posts
+        (user_id, content, image_url)
+      VALUES
+        ($1, $2, $3)
+      RETURNING *
+      `,
+      [
+        req.user.id,
+        content.trim(),
+        imageUrl
+      ]
+    );
+
+    res.json({
+      success: true,
+      post: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create post error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to create post"
+    });
   }
+});
+
+// ==================================================
+// LEVELS
+// ==================================================
+
+app.get("/api/levels", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        levels.id,
+        levels.title,
+        levels.description,
+        levels.image_url,
+        levels.created_at,
+        users.username
+      FROM levels
+      JOIN users
+        ON users.id = levels.user_id
+      ORDER BY levels.created_at DESC
+      LIMIT 50
+    `);
+
+    res.json({
+      levels: result.rows
+    });
+  } catch (error) {
+    console.error("Levels error:", error);
+
+    res.status(500).json({
+      error: "Failed to load levels"
+    });
+  }
+});
+
+// ==================================================
+// CREATE LEVEL
+// ==================================================
+
+app.post("/api/levels", requireAuth, async (req, res) => {
+  try {
+    const {
+      title,
+      description = "",
+      imageUrl = ""
+    } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({
+        error: "Level title is required"
+      });
+    }
+
+    if (title.length > 100) {
+      return res.status(400).json({
+        error: "Level title is too long"
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO levels
+        (user_id, title, description, image_url)
+      VALUES
+        ($1, $2, $3, $4)
+      RETURNING *
+      `,
+      [
+        req.user.id,
+        title.trim(),
+        description,
+        imageUrl
+      ]
+    );
+
+    res.json({
+      success: true,
+      level: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create level error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to create level"
+    });
+  }
+});
+
+// ==================================================
+// SINGLE LEVEL
+// ==================================================
+
+app.get("/api/levels/:id", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        levels.id,
+        levels.title,
+        levels.description,
+        levels.image_url,
+        levels.created_at,
+        users.username
+      FROM levels
+      JOIN users
+        ON users.id = levels.user_id
+      WHERE levels.id = $1
+      `,
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "Level not found"
+      });
+    }
+
+    res.json({
+      level: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Level error:", error);
+
+    res.status(500).json({
+      error: "Failed to load level"
+    });
+  }
+});
+
+// ==================================================
+// STATIC WEBSITE
+// ==================================================
+
+app.use(express.static(__dirname));
+
+app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`LittleBigAdventure server running on port ${PORT}`);
-  console.log("Firebase Admin connected");
+// ==================================================
+// 404
+// ==================================================
+
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Not Found"
+  });
 });
+
+// ==================================================
+// START SERVER
+// ==================================================
+
+async function startServer() {
+  try {
+    await initDatabase();
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log("========================================");
+      console.log("LittleBigAdventure server running");
+      console.log("Port: " + PORT);
+      console.log("Render PostgreSQL connected");
+      console.log("========================================");
+    });
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
