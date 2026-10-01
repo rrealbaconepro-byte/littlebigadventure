@@ -1,4 +1,4 @@
-```html
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -15,17 +15,17 @@
 
     <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
     <meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
-    <meta content="LBP.me" property="og:site_name">
+    <meta content="LittleBigAdventure" property="og:site_name">
     <meta content="article" property="og:type">
-    <meta content="http://lbp.me/" property="og:url">
-    <link href="http://lbp.me/" rel="canonical">
+    <meta content="https://littlebigadventure.onrender.com/" property="og:url">
+    <link href="https://littlebigadventure.onrender.com/" rel="canonical">
 
     <meta content="index,follow,archive" name="robots">
-    <meta content="LBP.me" name="title">
+    <meta content="LittleBigAdventure" name="title">
     <meta content="LittleBigPlanet, Little Big Planet, LittleBigPlanet 2, Community, Levels, LBP.me, Sackboy, PlayStation, PS3, Media Molecule, Sony" name="keywords">
-    <meta content="Browse and discover LittleBigPlanet levels on LBP.me" name="description">
-    <meta content="Browse and discover LittleBigPlanet levels on LBP.me" property="og:description">
-    <meta content="LBP.me" property="og:title">
+    <meta content="Browse and discover LittleBigAdventure levels" name="description">
+    <meta content="Browse and discover LittleBigAdventure levels" property="og:description">
+    <meta content="LittleBigAdventure" property="og:title">
     <meta content="/web/20110722172609im_/http://lbp.me/" property="og:image">
 
     <!-- LBP-DOT-ME-STYLEE -->
@@ -48,10 +48,6 @@
       }
 
     </script>
-
-    <script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/modernizr-1.5.min.js" type="text/javascript"></script>
-    <script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/scripts.js" type="text/javascript"></script>
-    <script src="https://web.archive.org/web/20110722172609js_/http://i.lbp.me/js/jquery/plugins/jquery.swfobject.1-1-1.min.js" type="text/javascript"></script>
 
     <!-- icons -->
     <link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="shortcut icon" type="image/x-icon">
@@ -224,44 +220,6 @@
             <div class="container container_12">
 
               <div class="grid_12" id="welcomeintro">
-
-                <script>
-                  $(document).ready(function() {
-
-                    if ($("html[lang='en']").length) {
-
-                      $('#welcomeintro').flash({
-
-                        swf: 'https://web.archive.org/web/20110722172609/http://i.lbp.me/images/welcome.swf',
-
-                        height: 256,
-                        width: 944,
-
-                        hasVersion: 10,
-
-                        wmode: 'transparent',
-
-                        AllowScriptAccess: 'always',
-
-                        flashvars: {
-
-                          loginurl: 'https://serviceunavailable.neocities.org
-
-                          registerurl: 'https://serviceunavailable.neocities.org.action'
-
-                        },
-
-                        hasVersionFail: function() {
-                          return false;
-                        }
-
-                      });
-
-                    }
-
-                  });
-
-                </script>
 
                 <img height="256" src="https://i.postimg.cc/0j1NgGw6/IMG-0713.jpg" width="944" alt="">
 
@@ -616,6 +574,52 @@
     </div>
 
 
+
+    <!-- LittleBigAdventure Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script>
+      const firebaseConfig = {
+        apiKey: "AIzaSyBMeRJ1rGu7h6obYXZcf_qKueNU7GNGBR0",
+        authDomain: "littlebigadventure-b7ebb.firebaseapp.com",
+        projectId: "littlebigadventure-b7ebb",
+        storageBucket: "littlebigadventure-b7ebb.firebasestorage.app",
+        messagingSenderId: "733697907566",
+        appId: "1:733697907566:web:eb20d410cd5b8ea0bf7f7f",
+        measurementId: "G-VYQYD646N8"
+      };
+
+      firebase.initializeApp(firebaseConfig);
+      const lbaAuth = firebase.auth();
+      const LBA_API = "/api";
+
+      function lbaAuthEmail(username) {
+        return username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "_") +
+          "@accounts.littlebigadventure.local";
+      }
+
+      async function lbaRequest(path, options) {
+        options = options || {};
+        options.headers = options.headers || {};
+        options.headers["Content-Type"] = "application/json";
+
+        if (lbaAuth.currentUser) {
+          options.headers["Authorization"] =
+            "Bearer " + await lbaAuth.currentUser.getIdToken();
+        }
+
+        const response = await fetch(LBA_API + path, options);
+        let data = {};
+        try { data = await response.json(); } catch (_) {}
+
+        if (!response.ok) {
+          throw new Error(data.error || "Request failed.");
+        }
+
+        return data;
+      }
+    </script>
+
     <script>
       function openAccountModal(type) {
         document.getElementById('accountModal').style.display = 'flex';
@@ -634,7 +638,7 @@
           type === 'login' ? 'block' : 'none';
       }
 
-      function createAccount() {
+      async function createAccount() {
         var username = document.getElementById('signupUsername').value.trim();
         var password = document.getElementById('signupPassword').value;
         var confirm = document.getElementById('signupConfirm').value;
@@ -643,6 +647,11 @@
 
         if (!username || !password || !confirm) {
           message.textContent = 'Please fill in the required fields.';
+          return;
+        }
+
+        if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username)) {
+          message.textContent = 'Username must be 3-24 characters and use letters, numbers, _, . or -.';
           return;
         }
 
@@ -656,145 +665,137 @@
           return;
         }
 
-        var accounts = getAccounts();
+        message.textContent = 'Creating account...';
 
-        if (accounts.some(function(account) {
-          return account.username.toLowerCase() === username.toLowerCase();
-        })) {
-          message.textContent = 'That username is already taken.';
-          return;
+        try {
+          await lbaAuth.createUserWithEmailAndPassword(
+            lbaAuthEmail(username),
+            password
+          );
+
+          await lbaRequest('/profile', {
+            method: 'POST',
+            body: JSON.stringify({
+              username: username,
+              email: email || null
+            })
+          });
+
+          message.textContent = 'Account created!';
+
+          setTimeout(function() {
+            closeAccountModal();
+            updateAccountMenu();
+            renderPlayers();
+          }, 600);
+        } catch (error) {
+          console.error(error);
+
+          if (error.code === 'auth/email-already-in-use') {
+            message.textContent = 'That username is already taken.';
+          } else if (error.code === 'auth/weak-password') {
+            message.textContent = 'Password must be at least 6 characters.';
+          } else {
+            message.textContent = error.message || 'Could not create account.';
+          }
         }
-
-        var newAccount = {
-          username: username,
-          password: password,
-          email: email,
-          created: new Date().toISOString()
-        };
-
-        accounts.push(newAccount);
-        localStorage.setItem('lbaAccounts', JSON.stringify(accounts));
-        localStorage.setItem('lbaAccount', JSON.stringify(newAccount));
-        localStorage.setItem('lbaLoggedIn', 'true');
-
-        message.textContent = 'Account created!';
-
-        setTimeout(function() {
-          closeAccountModal();
-          updateAccountMenu();
-        }, 600);
       }
 
-      function loginAccount() {
+      async function loginAccount() {
         var username = document.getElementById('loginUsername').value.trim();
         var password = document.getElementById('loginPassword').value;
         var message = document.getElementById('loginMessage');
-        var accounts = getAccounts();
 
-        var account = accounts.find(function(item) {
-          return item.username.toLowerCase() === username.toLowerCase() &&
-                 item.password === password;
-        });
-
-        if (!account) {
-          message.textContent = accounts.length
-            ? 'Incorrect username or password.'
-            : 'No account exists yet. Sign up first.';
+        if (!username || !password) {
+          message.textContent = 'Enter your username and password.';
           return;
         }
 
-        localStorage.setItem('lbaAccount', JSON.stringify(account));
-        localStorage.setItem('lbaLoggedIn', 'true');
-        message.textContent = 'Logged in!';
-
-        setTimeout(function() {
-          closeAccountModal();
-          updateAccountMenu();
-        }, 600);
-      }
-
-      function getAccounts() {
-        var accounts = [];
+        message.textContent = 'Logging in...';
 
         try {
-          accounts = JSON.parse(localStorage.getItem('lbaAccounts') || '[]');
-        } catch (e) {
-          accounts = [];
+          await lbaAuth.signInWithEmailAndPassword(
+            lbaAuthEmail(username),
+            password
+          );
+
+          message.textContent = 'Logged in!';
+
+          setTimeout(function() {
+            closeAccountModal();
+            updateAccountMenu();
+            renderPlayers();
+          }, 500);
+        } catch (error) {
+          console.error(error);
+          message.textContent = 'Incorrect username or password.';
         }
-
-        // Migrate the older single-account format if it exists.
-        if (!accounts.length) {
-          var oldAccount = localStorage.getItem('lbaAccount');
-
-          if (oldAccount) {
-            try {
-              var parsed = JSON.parse(oldAccount);
-              accounts = [parsed];
-              localStorage.setItem('lbaAccounts', JSON.stringify(accounts));
-            } catch (e) {
-              accounts = [];
-            }
-          }
-        }
-
-        return accounts;
       }
 
-      function getCurrentAccount() {
-        if (localStorage.getItem('lbaLoggedIn') !== 'true') {
-          return null;
-        }
+      async function getCurrentProfile() {
+        if (!lbaAuth.currentUser) return null;
 
         try {
-          return JSON.parse(localStorage.getItem('lbaAccount') || 'null');
-        } catch (e) {
+          var result = await lbaRequest('/profile/me');
+          return result.profile || result;
+        } catch (error) {
+          console.error(error);
           return null;
         }
       }
 
-      function renderPlayers() {
-        var players = getAccounts();
+      async function renderPlayers() {
         var container = document.getElementById('playersList');
+        if (!container) return;
 
-        if (!players.length) {
-          container.innerHTML = '<p>No players yet.</p>';
+        if (!lbaAuth.currentUser) {
+          container.innerHTML = '<p>Sign in to see your player profile.</p>';
           return;
         }
 
-        container.innerHTML = players.slice().reverse().map(function(player) {
-          return '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-                   '<strong>' + escapeHtml(player.username) + '</strong>' +
-                 '</div>';
-        }).join('');
-      }
+        var profile = await getCurrentProfile();
 
-      function getPosts() {
-        try {
-          return JSON.parse(localStorage.getItem('lbaPosts') || '[]');
-        } catch (e) {
-          return [];
+        if (!profile) {
+          container.innerHTML = '<p>Could not load your profile.</p>';
+          return;
         }
+
+        container.innerHTML =
+          '<div style="padding:8px 4px;">' +
+          '<strong>' + escapeHtml(profile.username || 'Player') + '</strong>' +
+          '<br><small>You are signed in.</small>' +
+          '</div>';
       }
 
-      function renderPosts() {
-        var posts = getPosts();
+      async function renderPosts() {
         var container = document.getElementById('postsList');
+        if (!container) return;
 
-        if (!posts.length) {
-          container.innerHTML = '<p>No posts yet.</p>';
-          return;
+        container.innerHTML = '<p>Loading posts...</p>';
+
+        try {
+          var result = await lbaRequest('/posts');
+          var posts = result.posts || [];
+
+          if (!posts.length) {
+            container.innerHTML = '<p>No posts yet.</p>';
+            return;
+          }
+
+          container.innerHTML = posts.map(function(post) {
+            return '<div style="padding:8px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
+              '<strong>' + escapeHtml(post.author || post.username || 'Player') + '</strong>' +
+              '<p style="margin:4px 0 0 0;">' + escapeHtml(post.text || '') + '</p>' +
+              '</div>';
+          }).join('');
+        } catch (error) {
+          console.error(error);
+          container.innerHTML = '<p>Could not load posts.</p>';
         }
-
-        container.innerHTML = posts.map(function(post) {
-          return '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-                   '<strong>' + escapeHtml(post.author) + '</strong>' +
-                   '<p style="margin:4px 0 0 0;">' + escapeHtml(post.text) + '</p>' +
-                 '</div>';
-        }).join('');
       }
 
       function openPostCreator() {
-        if (!getCurrentAccount()) {
+        if (!lbaAuth.currentUser) {
           openAccountModal('login');
           document.getElementById('loginMessage').textContent =
             'You need an account and must be logged in to make a post.';
@@ -811,12 +812,11 @@
         document.getElementById('postModal').style.display = 'none';
       }
 
-      function createPost() {
+      async function createPost() {
         var text = document.getElementById('postText').value.trim();
         var message = document.getElementById('postMessage');
-        var account = getCurrentAccount();
 
-        if (!account) {
+        if (!lbaAuth.currentUser) {
           message.textContent = 'You need to be logged in.';
           return;
         }
@@ -826,50 +826,65 @@
           return;
         }
 
-        var posts = getPosts();
+        if (text.length > 1000) {
+          message.textContent = 'Post is too long.';
+          return;
+        }
 
-        posts.unshift({
-          author: account.username,
-          text: text,
-          created: new Date().toISOString()
-        });
+        message.textContent = 'Posting...';
 
-        localStorage.setItem('lbaPosts', JSON.stringify(posts));
+        try {
+          await lbaRequest('/posts', {
+            method: 'POST',
+            body: JSON.stringify({ text: text })
+          });
 
-        message.textContent = 'Post created!';
+          message.textContent = 'Post created!';
 
-        setTimeout(function() {
-          closePostCreator();
-          renderPosts();
-        }, 500);
+          setTimeout(function() {
+            closePostCreator();
+            renderPosts();
+          }, 500);
+        } catch (error) {
+          console.error(error);
+          message.textContent = error.message || 'Could not create post.';
+        }
       }
 
-      function updateAccountMenu() {
-        var saved = localStorage.getItem('lbaAccount');
-        var loggedIn = localStorage.getItem('lbaLoggedIn') === 'true';
-
-        if (!saved || !loggedIn) return;
-
-        var account = JSON.parse(saved);
+      async function updateAccountMenu() {
         var menu = document.getElementById('accountmenu');
+        if (!menu) return;
+
+        if (!lbaAuth.currentUser) {
+          menu.innerHTML =
+            '<li><span class="psntitle">DigitalNetwork</span></li>' +
+            '<li><a href="#" onclick="openAccountModal(\'signup\'); return false;">Sign Up</a></li>' +
+            '<li><a href="#" onclick="openAccountModal(\'login\'); return false;">Login</a></li>';
+          return;
+        }
+
+        var profile = await getCurrentProfile();
+        var username = profile && profile.username ? profile.username : 'Player';
 
         menu.innerHTML =
           '<li><span class="psntitle">DigitalNetwork</span></li>' +
-          '<li><a href="/profile">' + account.username + '</a></li>' +
+          '<li><strong style="padding:0 8px;">' + escapeHtml(username) + '</strong></li>' +
           '<li><a href="#" onclick="logoutAccount(); return false;">Logout</a></li>';
       }
 
-      function logoutAccount() {
-        localStorage.removeItem('lbaLoggedIn');
-        location.reload();
+      async function logoutAccount() {
+        try {
+          await lbaAuth.signOut();
+        } catch (error) {
+          console.error(error);
+        }
+
+        updateAccountMenu();
+        renderPlayers();
       }
 
       function openLevelCreator() {
-        var loggedIn = localStorage.getItem('lbaLoggedIn') === 'true';
-        var saved = localStorage.getItem('lbaAccount');
-
-        // You must have an account and be logged in to make a level.
-        if (!loggedIn || !saved) {
+        if (!lbaAuth.currentUser) {
           openAccountModal('login');
           document.getElementById('loginMessage').textContent =
             'You need an account and must be logged in to make a level.';
@@ -886,70 +901,97 @@
         document.getElementById('levelModal').style.display = 'none';
       }
 
-      function getLevels() {
-        try {
-          return JSON.parse(localStorage.getItem('lbaLevels') || '[]');
-        } catch (e) {
-          return [];
-        }
-      }
-
-      function renderLevels() {
-        var levels = getLevels();
+      async function renderLevels() {
         var empty = document.getElementById('noGameMessage');
         var list = document.getElementById('levelsList');
 
-        if (!levels.length) {
-          empty.style.display = 'block';
-          list.style.display = 'none';
+        if (!empty || !list) return;
+
+        empty.innerHTML = '<strong>Loading levels...</strong>';
+        empty.style.display = 'block';
+        list.style.display = 'none';
+
+        try {
+          var result = await lbaRequest('/levels');
+          var levels = result.levels || [];
+
+          if (!levels.length) {
+            empty.innerHTML =
+              '<strong>There is No Game</strong>' +
+              '<br><span style="display:block;margin-top:6px;">Make one first!</span>';
+            return;
+          }
+
+          empty.style.display = 'none';
+          list.style.display = 'block';
+
+          list.innerHTML = levels.map(function(level) {
+            var title = level.title || level.name || 'Untitled Level';
+            var creator = level.creator || level.username || 'Unknown Player';
+
+            return '<div style="padding:9px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
+              '<a href="/level.html?id=' + encodeURIComponent(level.id || '') + '">' +
+              '<strong>' + escapeHtml(title) + '</strong></a>' +
+              '<br><small>by ' + escapeHtml(creator) + '</small>' +
+              '</div>';
+          }).join('');
+        } catch (error) {
+          console.error(error);
+          empty.innerHTML = '<strong>Could not load levels.</strong>';
           list.innerHTML = '';
-          return;
         }
-
-        empty.style.display = 'none';
-        list.style.display = 'block';
-
-        list.innerHTML = levels.map(function(level) {
-          var creator = level.creator || 'Unknown Player';
-
-          return '<div style="padding:9px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-                   '<strong>' + escapeHtml(level.name) + '</strong>' +
-                   '<br><small>by ' + escapeHtml(creator) + '</small>' +
-                 '</div>';
-        }).join('');
       }
 
-      function createLevel() {
+      async function createLevel() {
         var name = document.getElementById('levelName').value.trim();
         var message = document.getElementById('levelMessage');
+
+        if (!lbaAuth.currentUser) {
+          message.textContent = 'You need to be logged in.';
+          return;
+        }
 
         if (!name) {
           message.textContent = 'Give your level a name first.';
           return;
         }
 
-        var levels = getLevels();
+        if (name.length > 80) {
+          message.textContent = 'Level name is too long.';
+          return;
+        }
 
-        var account = getCurrentAccount();
+        message.textContent = 'Creating level...';
 
-        levels.unshift({
-          name: name,
-          creator: account ? account.username : 'Unknown Player',
-          created: new Date().toISOString()
-        });
+        try {
+          var result = await lbaRequest('/levels', {
+            method: 'POST',
+            body: JSON.stringify({
+              title: name,
+              description: ''
+            })
+          });
 
-        localStorage.setItem('lbaLevels', JSON.stringify(levels));
+          message.textContent = 'Level created!';
 
-        message.textContent = 'Level created!';
+          setTimeout(function() {
+            closeLevelCreator();
+            renderLevels();
 
-        setTimeout(function() {
-          closeLevelCreator();
-          renderLevels();
-        }, 500);
+            if (result.level && result.level.id) {
+              location.href =
+                '/level.html?id=' + encodeURIComponent(result.level.id);
+            }
+          }, 500);
+        } catch (error) {
+          console.error(error);
+          message.textContent =
+            error.message || 'Could not create level.';
+        }
       }
 
       function escapeHtml(value) {
-        return String(value)
+        return String(value == null ? '' : value)
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;')
@@ -957,11 +999,16 @@
           .replace(/'/g, '&#039;');
       }
 
+      lbaAuth.onAuthStateChanged(function() {
+        updateAccountMenu();
+        renderPlayers();
+      });
+
       document.addEventListener('DOMContentLoaded', function() {
         renderLevels();
-        renderPlayers();
         renderPosts();
         updateAccountMenu();
+        renderPlayers();
       });
 
       window.addEventListener('click', function(event) {
@@ -983,11 +1030,8 @@
       });
     </script>
 
-    <link href="/css/flood.css" rel="stylesheet" type="text/css" media="all">
 
-    <script src="/scripts/flood.js"></script>
 
   </body>
 
 </html>
-```
