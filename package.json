@@ -1,7 +1,6 @@
 {
   "name": "littlebigadventure",
   "version": "1.0.0",
-  "description": "LittleBigAdventure website",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -10,6 +9,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "firebase-admin": "^13.5.0"
   }
 }
