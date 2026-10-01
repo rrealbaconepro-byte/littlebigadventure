@@ -4,7 +4,7 @@
 
   <head>
 
-    <script src="https://djpieces.neocities.org/name.js"></script>
+    <script src=""></script>
 
     <script>
       if (typeof globalSiteSettings !== 'undefined') {
@@ -576,9 +576,16 @@
 
 
     <!-- LittleBigAdventure Firebase -->
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-    <script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+      import {
+        getAuth,
+        createUserWithEmailAndPassword,
+        signInWithEmailAndPassword,
+        signOut,
+        onAuthStateChanged
+      } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+
       const firebaseConfig = {
         apiKey: "AIzaSyBMeRJ1rGu7h6obYXZcf_qKueNU7GNGBR0",
         authDomain: "littlebigadventure-b7ebb.firebaseapp.com",
@@ -589,8 +596,18 @@
         measurementId: "G-VYQYD646N8"
       };
 
-      firebase.initializeApp(firebaseConfig);
-      const lbaAuth = firebase.auth();
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+
+      window.LBAFirebase = {
+        app,
+        auth,
+        createUserWithEmailAndPassword,
+        signInWithEmailAndPassword,
+        signOut,
+        onAuthStateChanged
+      };
+
       const LBA_API = "/api";
 
       function lbaAuthEmail(username) {
@@ -603,9 +620,9 @@
         options.headers = options.headers || {};
         options.headers["Content-Type"] = "application/json";
 
-        if (lbaAuth.currentUser) {
+        if (auth.currentUser) {
           options.headers["Authorization"] =
-            "Bearer " + await lbaAuth.currentUser.getIdToken();
+            "Bearer " + await auth.currentUser.getIdToken();
         }
 
         const response = await fetch(LBA_API + path, options);
@@ -618,6 +635,13 @@
 
         return data;
       }
+
+      window.LBAAuthHelpers = {
+        lbaAuthEmail,
+        lbaRequest
+      };
+
+      window.dispatchEvent(new Event("lbafirebase-ready"));
     </script>
 
     <script>
@@ -636,6 +660,10 @@
 
         document.getElementById('loginBox').style.display =
           type === 'login' ? 'block' : 'none';
+      }
+
+      function getLBAFirebase() {
+        return window.LBAFirebase;
       }
 
       async function createAccount() {
@@ -668,12 +696,13 @@
         message.textContent = 'Creating account...';
 
         try {
-          await lbaAuth.createUserWithEmailAndPassword(
-            lbaAuthEmail(username),
+          await window.LBAFirebase.createUserWithEmailAndPassword(
+            window.LBAFirebase.auth,
+            window.LBAAuthHelpers.lbaAuthEmail(username),
             password
           );
 
-          await lbaRequest('/profile', {
+          await window.LBAAuthHelpers.lbaRequest('/profile', {
             method: 'POST',
             body: JSON.stringify({
               username: username,
@@ -714,8 +743,9 @@
         message.textContent = 'Logging in...';
 
         try {
-          await lbaAuth.signInWithEmailAndPassword(
-            lbaAuthEmail(username),
+          await window.LBAFirebase.signInWithEmailAndPassword(
+            window.LBAFirebase.auth,
+            window.LBAAuthHelpers.lbaAuthEmail(username),
             password
           );
 
@@ -733,10 +763,10 @@
       }
 
       async function getCurrentProfile() {
-        if (!lbaAuth.currentUser) return null;
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) return null;
 
         try {
-          var result = await lbaRequest('/profile/me');
+          var result = await window.LBAAuthHelpers.lbaRequest('/profile/me');
           return result.profile || result;
         } catch (error) {
           console.error(error);
@@ -748,7 +778,7 @@
         var container = document.getElementById('playersList');
         if (!container) return;
 
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           container.innerHTML = '<p>Sign in to see your player profile.</p>';
           return;
         }
@@ -774,7 +804,7 @@
         container.innerHTML = '<p>Loading posts...</p>';
 
         try {
-          var result = await lbaRequest('/posts');
+          var result = await window.LBAAuthHelpers.lbaRequest('/posts');
           var posts = result.posts || [];
 
           if (!posts.length) {
@@ -795,7 +825,7 @@
       }
 
       function openPostCreator() {
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           openAccountModal('login');
           document.getElementById('loginMessage').textContent =
             'You need an account and must be logged in to make a post.';
@@ -816,7 +846,7 @@
         var text = document.getElementById('postText').value.trim();
         var message = document.getElementById('postMessage');
 
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           message.textContent = 'You need to be logged in.';
           return;
         }
@@ -834,7 +864,7 @@
         message.textContent = 'Posting...';
 
         try {
-          await lbaRequest('/posts', {
+          await window.LBAAuthHelpers.lbaRequest('/posts', {
             method: 'POST',
             body: JSON.stringify({ text: text })
           });
@@ -855,7 +885,7 @@
         var menu = document.getElementById('accountmenu');
         if (!menu) return;
 
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           menu.innerHTML =
             '<li><span class="psntitle">DigitalNetwork</span></li>' +
             '<li><a href="#" onclick="openAccountModal(\'signup\'); return false;">Sign Up</a></li>' +
@@ -874,7 +904,7 @@
 
       async function logoutAccount() {
         try {
-          await lbaAuth.signOut();
+          await window.LBAFirebase.signOut(window.LBAFirebase.auth);
         } catch (error) {
           console.error(error);
         }
@@ -884,7 +914,7 @@
       }
 
       function openLevelCreator() {
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           openAccountModal('login');
           document.getElementById('loginMessage').textContent =
             'You need an account and must be logged in to make a level.';
@@ -912,7 +942,7 @@
         list.style.display = 'none';
 
         try {
-          var result = await lbaRequest('/levels');
+          var result = await window.LBAAuthHelpers.lbaRequest('/levels');
           var levels = result.levels || [];
 
           if (!levels.length) {
@@ -946,7 +976,7 @@
         var name = document.getElementById('levelName').value.trim();
         var message = document.getElementById('levelMessage');
 
-        if (!lbaAuth.currentUser) {
+        if (!window.LBAFirebase && window.LBAFirebase.auth.currentUser) {
           message.textContent = 'You need to be logged in.';
           return;
         }
@@ -964,7 +994,7 @@
         message.textContent = 'Creating level...';
 
         try {
-          var result = await lbaRequest('/levels', {
+          var result = await window.LBAAuthHelpers.lbaRequest('/levels', {
             method: 'POST',
             body: JSON.stringify({
               title: name,
@@ -999,7 +1029,7 @@
           .replace(/'/g, '&#039;');
       }
 
-      lbaAuth.onAuthStateChanged(function() {
+      window.LBAFirebase.onAuthStateChanged(function() {
         updateAccountMenu();
         renderPlayers();
       });
