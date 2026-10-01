@@ -1,10 +1,16 @@
 const express = require("express");
+const path = require("path");
+
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
+
+// ==========================================
+// FIREBASE ADMIN
+// ==========================================
 
 const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
@@ -30,6 +36,24 @@ initializeApp({
 
 const db = getFirestore();
 
+// ==========================================
+// WEBSITE
+// ==========================================
+
+const indexPath = path.join(__dirname, "index.html");
+
+// Redirect visitors from / to index.html
+app.get("/", (req, res) => {
+  res.redirect("/index.html");
+});
+
+// Serve index.html and other website files
+app.use(express.static(__dirname));
+
+// ==========================================
+// STATUS
+// ==========================================
+
 app.get("/api/status", (req, res) => {
   res.json({
     online: true,
@@ -37,6 +61,10 @@ app.get("/api/status", (req, res) => {
     firebase: true
   });
 });
+
+// ==========================================
+// FIREBASE TEST
+// ==========================================
 
 app.get("/api/firebase-test", async (req, res) => {
   try {
@@ -66,9 +94,17 @@ app.get("/api/firebase-test", async (req, res) => {
   }
 });
 
+// ==========================================
+// HEALTH
+// ==========================================
+
 app.get("/health", (req, res) => {
   res.status(200).send("LittleBigAdventure is online");
 });
+
+// ==========================================
+// 404
+// ==========================================
 
 app.use((req, res) => {
   res.status(404).json({
@@ -76,8 +112,17 @@ app.use((req, res) => {
   });
 });
 
+// ==========================================
+// START
+// ==========================================
+
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("LittleBigAdventure server started on port " + PORT);
+  console.log("================================");
+  console.log("LittleBigAdventure server started");
+  console.log("Port: " + PORT);
+  console.log("Firebase Admin connected");
+  console.log("Index: " + indexPath);
+  console.log("================================");
 });
