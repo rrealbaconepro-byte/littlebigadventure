@@ -1,18 +1,11 @@
 const express = require("express");
 const path = require("path");
 
-const {
-  initializeApp,
-  cert
-} = require("firebase-admin/app");
-
+const { initializeApp, cert } = require("firebase-admin/app");
 const {
   getFirestore,
   FieldValue
 } = require("firebase-admin/firestore");
-
-const app = express();
-const PORT = process.env.PORT || 10000;
 
 // ==================================================
 // FIREBASE ADMIN
@@ -44,6 +37,9 @@ const db = getFirestore();
 // EXPRESS
 // ==================================================
 
+const app = express();
+const PORT = process.env.PORT || 10000;
+
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -58,6 +54,7 @@ app.get("/api/status", async (req, res) => {
         online: true,
         service: "LittleBigAdventure",
         firebase: true,
+        database: "Firestore",
         updatedAt: FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -70,7 +67,7 @@ app.get("/api/status", async (req, res) => {
       database: "Firestore"
     });
   } catch (error) {
-    console.error("Firebase error:", error);
+    console.error("Firebase status error:", error);
 
     res.status(500).json({
       online: false,
@@ -117,8 +114,8 @@ app.get("/api/firebase-test", async (req, res) => {
 });
 
 // ==================================================
-// READ DOCUMENT
-// GET /api/data/users/123
+// READ FIRESTORE DOCUMENT
+// GET /api/data/users/USER_ID
 // ==================================================
 
 app.get("/api/data/:collection/:id", async (req, res) => {
@@ -152,7 +149,8 @@ app.get("/api/data/:collection/:id", async (req, res) => {
 });
 
 // ==================================================
-// WRITE DOCUMENT
+// WRITE FIRESTORE DOCUMENT
+// POST /api/data/users/USER_ID
 // ==================================================
 
 app.post("/api/data/:collection/:id", async (req, res) => {
@@ -161,6 +159,7 @@ app.post("/api/data/:collection/:id", async (req, res) => {
 
     if (!req.body || typeof req.body !== "object") {
       return res.status(400).json({
+        success: false,
         error: "JSON body required"
       });
     }
@@ -192,7 +191,8 @@ app.post("/api/data/:collection/:id", async (req, res) => {
 });
 
 // ==================================================
-// DELETE DOCUMENT
+// DELETE FIRESTORE DOCUMENT
+// DELETE /api/data/users/USER_ID
 // ==================================================
 
 app.delete("/api/data/:collection/:id", async (req, res) => {
@@ -241,14 +241,14 @@ app.use((req, res) => {
 });
 
 // ==================================================
-// START
+// START SERVER
 // ==================================================
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("========================================");
-  console.log("LittleBigAdventure server running");
+  console.log("LittleBigAdventure server started");
   console.log("Port: " + PORT);
-  console.log("Firebase Admin connected");
-  console.log("Firestore connected");
+  console.log("Firebase Admin: connected");
+  console.log("Firestore: connected");
   console.log("========================================");
 });
