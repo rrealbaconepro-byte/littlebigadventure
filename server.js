@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("path");
+const cookieParser = require("cookie-parser");
 
 const {
   initializeApp,
@@ -51,6 +52,7 @@ const app = express();
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // ==================================================
 // AUTH HELPERS
@@ -271,9 +273,40 @@ app.post("/api/auth/signup", async (req, res) => {
         updated_at: FieldValue.serverTimestamp()
       });
 
-      const customToken = await auth.createCustomToken(
-        userRecord.uid
+      const apiKey =
+        process.env.FIREBASE_WEB_API_KEY ||
+        "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
+
+      if (!apiKey) {
+        throw new Error("Missing FIREBASE_WEB_API_KEY");
+      }
+
+      // Sign the newly created Firebase Auth user in immediately so the
+      // browser receives the same session cookie used by normal login.
+      const signInResponse = await fetch(
+        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" +
+          encodeURIComponent(apiKey),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            email: authEmail,
+            password,
+            returnSecureToken: true
+          })
+        }
       );
+
+      const signInData = await signInResponse.json();
+
+      if (!signInResponse.ok || !signInData.idToken) {
+        console.error("Firebase signup session error:", signInData);
+        throw new Error("Account created but login session could not be created");
+      }
+
+      await createSession(res, signInData.idToken);
 
       res.status(201).json({
         success: true,
@@ -281,8 +314,7 @@ app.post("/api/auth/signup", async (req, res) => {
           uid: userRecord.uid,
           username,
           email: emailInput
-        },
-        customToken
+        }
       });
     } catch (error) {
       // Avoid leaving an Auth account behind if the profile write fails.
@@ -340,7 +372,9 @@ app.post("/api/auth/login", async (req, res) => {
 
     const profile = profileQuery.docs[0].data();
 
-    const apiKey = process.env.FIREBASE_WEB_API_KEY;
+    const apiKey =
+        process.env.FIREBASE_WEB_API_KEY ||
+        "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
 
     if (!apiKey) {
       return res.status(500).json({
