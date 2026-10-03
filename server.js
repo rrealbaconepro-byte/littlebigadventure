@@ -1301,9 +1301,13 @@ app.get(
           Number(b.user_id || 0)
       );
 
-      res.json(players);
+      res.json({
+        players
+      });
     } catch (error) {
+      console.error("Players read error:", error);
       res.status(503).json({
+        players: [],
         error:
           "Players temporarily unavailable"
       });
@@ -2123,9 +2127,13 @@ app.get(
           )
         );
 
-      res.json(posts);
+      res.json({
+        posts
+      });
     } catch (error) {
+      console.error("Posts read error:", error);
       res.status(503).json({
+        posts: [],
         error:
           "Posts temporarily unavailable"
       });
