@@ -1,48 +1,32 @@
 const express = require("express");
-const path = require("path");
 const cookieParser = require("cookie-parser");
 
-const {
-  initializeApp,
-  cert,
-  getApps
-} = require("firebase-admin/app");
-
-const {
-  getAuth
-} = require("firebase-admin/auth");
-
-const {
-  getFirestore,
-  FieldValue
-} = require("firebase-admin/firestore");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 // ==================================================
 // FIREBASE ADMIN
 // ==================================================
 
-const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-
-if (!serviceAccountRaw) {
+if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
 }
 
 let serviceAccount;
 
 try {
-  serviceAccount = JSON.parse(serviceAccountRaw);
-} catch (error) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+} catch {
   throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
 }
 
-if (!getApps().length) {
-  initializeApp({
-    credential: cert(serviceAccount)
-  });
-}
+initializeApp({
+  credential: cert(serviceAccount)
+});
 
-const db = getFirestore();
 const auth = getAuth();
+const db = getFirestore();
 
 // ==================================================
 // EXPRESS
@@ -55,43 +39,39 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // ==================================================
-// AUTH HELPERS
+// HELPERS
 // ==================================================
 
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
 async function getCurrentUser(req) {
-  const sessionCookie = req.cookies?.session;
+  try {
+    const session = req.cookies?.session;
 
-  if (sessionCookie) {
-    try {
-      return await auth.verifySessionCookie(sessionCookie, true);
-    } catch (error) {
-      // Continue and check Bearer token below.
+    if (session) {
+      return await auth.verifySessionCookie(session, true);
     }
-  }
 
-  const authorization = req.headers.authorization || "";
+    const authorization = req.headers.authorization || "";
 
-  if (authorization.startsWith("Bearer ")) {
-    const token = authorization.substring(7).trim();
+    if (authorization.startsWith("Bearer ")) {
+      return await auth.verifyIdToken(
+        authorization.substring(7)
+      );
+    }
 
-    try {
+    const token = req.headers["x-firebase-token"];
+
+    if (token) {
       return await auth.verifyIdToken(token);
-    } catch (error) {
-      return null;
     }
+
+    return null;
+  } catch {
+    return null;
   }
-
-  const firebaseToken = req.headers["x-firebase-token"];
-
-  if (firebaseToken) {
-    try {
-      return await auth.verifyIdToken(String(firebaseToken));
-    } catch (error) {
-      return null;
-    }
-  }
-
-  return null;
 }
 
 async function requireUser(req, res) {
@@ -99,28 +79,84 @@ async function requireUser(req, res) {
 
   if (!user) {
     res.status(401).json({
+      success: false,
       error: "You must be logged in"
     });
-
     return null;
   }
 
   return user;
 }
 
-function cleanUsername(value) {
-  return String(value || "")
-    .trim()
-    .replace(/[^a-zA-Z0-9_.-]/g, "")
-    .slice(0, 30);
+async function getProfileByUid(uid) {
+  const snap = await db.collection("profiles").doc(uid).get();
+
+  if (!snap.exists) return null;
+
+  return {
+    id: snap.id,
+    ...snap.data()
+  };
 }
 
-function cleanEmail(value) {
-  return String(value || "").trim().toLowerCase();
+async function getProfileByUserId(userId) {
+  const numberId = Number(userId);
+
+  if (!Number.isInteger(numberId)) return null;
+
+  const snap = await db
+    .collection("profiles")
+    .where("user_id", "==", numberId)
+    .limit(1)
+    .get();
+
+  if (snap.empty) return null;
+
+  return {
+    id: snap.docs[0].id,
+    ...snap.docs[0].data()
+  };
 }
 
-function createPrivateAuthEmail(username) {
-  return `${username.toLowerCase()}@lba.local`;
+async function findProfileByUsername(username) {
+  const usernameLower = clean(username).toLowerCase();
+
+  const snap = await db
+    .collection("profiles")
+    .where("username_lower", "==", usernameLower)
+    .limit(1)
+    .get();
+
+  if (snap.empty) return null;
+
+  return {
+    id: snap.docs[0].id,
+    ...snap.docs[0].data()
+  };
+}
+
+async function getNextUserId() {
+  const ref = db.collection("_system").doc("user_counter");
+
+  return db.runTransaction(async transaction => {
+    const snap = await transaction.get(ref);
+
+    const nextId =
+      snap.exists && Number(snap.data().next_id)
+        ? Number(snap.data().next_id)
+        : 1;
+
+    transaction.set(
+      ref,
+      {
+        next_id: nextId + 1,
+        updated_at: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    return nextId;
+  });
 }
 
 // ==================================================
@@ -152,12 +188,12 @@ app.get("/api/firebase-test", async (req, res) => {
       { merge: true }
     );
 
-    const snapshot = await ref.get();
+    const snap = await ref.get();
 
     res.json({
       connected: true,
       firestore: true,
-      data: snapshot.data()
+      data: snap.data()
     });
   } catch (error) {
     console.error("Firebase error:", error);
@@ -171,259 +207,78 @@ app.get("/api/firebase-test", async (req, res) => {
 });
 
 // ==================================================
-// CREATE SESSION COOKIE
-// ==================================================
-
-async function createSession(res, idToken) {
-  const expiresIn = 1000 * 60 * 60 * 24 * 5;
-
-  const sessionCookie = await auth.createSessionCookie(idToken, {
-    expiresIn
-  });
-
-  res.cookie("session", sessionCookie, {
-    maxAge: expiresIn,
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/"
-  });
-}
-
-// ==================================================
 // SIGN UP
 // ==================================================
 
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    const username = cleanUsername(req.body.username);
+    const username = clean(req.body.username);
     const password = String(req.body.password || "");
-    const emailInput = cleanEmail(req.body.email);
+    const email = clean(req.body.email);
 
     if (!username) {
       return res.status(400).json({
+        success: false,
         error: "Username is required"
-      });
-    }
-
-    if (username.length < 3) {
-      return res.status(400).json({
-        error: "Username must be at least 3 characters"
       });
     }
 
     if (password.length < 6) {
       return res.status(400).json({
+        success: false,
         error: "Password must be at least 6 characters"
       });
     }
 
-    if (emailInput && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)) {
-      return res.status(400).json({
-        error: "Please enter a valid email address"
-      });
-    }
+    const existing = await findProfileByUsername(username);
 
-    const existingProfile = await db
-      .collection("profiles")
-      .where("username_lower", "==", username.toLowerCase())
-      .limit(1)
-      .get();
-
-    if (!existingProfile.empty) {
+    if (existing) {
       return res.status(409).json({
+        success: false,
         error: "Username is already taken"
       });
     }
 
-    const authEmail =
-      emailInput || createPrivateAuthEmail(username);
+    const userId = await getNextUserId();
 
-    let userRecord;
+    const user = await auth.createUser({
+      ...(email ? { email } : {}),
+      password,
+      displayName: username
+    });
 
-    try {
-      userRecord = await auth.createUser({
-        email: authEmail,
-        password,
-        displayName: username
-      });
-    } catch (error) {
-      if (error.code === "auth/email-already-exists") {
-        return res.status(409).json({
-          error: emailInput
-            ? "That email is already in use"
-            : "That username is already in use"
-        });
-      }
+    await db.collection("profiles").doc(user.uid).set({
+      uid: user.uid,
+      user_id: userId,
+      username,
+      username_lower: username.toLowerCase(),
+      display_name: username,
+      email: email || "",
+      auth_email: user.email || "",
+      bio: "",
+      avatar_url: "",
+      created_at: FieldValue.serverTimestamp(),
+      updated_at: FieldValue.serverTimestamp()
+    });
 
-      throw error;
-    }
-
-    try {
-      await db.collection("profiles").doc(userRecord.uid).set({
-        uid: userRecord.uid,
+    res.json({
+      success: true,
+      user: {
+        uid: user.uid,
+        user_id: userId,
         username,
-        username_lower: username.toLowerCase(),
         display_name: username,
-        email: emailInput,
-        auth_email: authEmail,
+        email: email || "",
         bio: "",
-        avatar_url: "",
-        created_at: FieldValue.serverTimestamp(),
-        updated_at: FieldValue.serverTimestamp()
-      });
-
-      const apiKey =
-        process.env.FIREBASE_WEB_API_KEY ||
-        "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
-
-      if (!apiKey) {
-        throw new Error("Missing FIREBASE_WEB_API_KEY");
+        avatar_url: ""
       }
-
-      // Sign the newly created Firebase Auth user in immediately so the
-      // browser receives the same session cookie used by normal login.
-      const signInResponse = await fetch(
-        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" +
-          encodeURIComponent(apiKey),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            email: authEmail,
-            password,
-            returnSecureToken: true
-          })
-        }
-      );
-
-      const signInData = await signInResponse.json();
-
-      if (!signInResponse.ok || !signInData.idToken) {
-        console.error("Firebase signup session error:", signInData);
-        throw new Error("Account created but login session could not be created");
-      }
-
-      await createSession(res, signInData.idToken);
-
-      res.status(201).json({
-        success: true,
-        user: {
-          uid: userRecord.uid,
-          username,
-          email: emailInput
-        }
-      });
-    } catch (error) {
-      // Avoid leaving an Auth account behind if the profile write fails.
-      try {
-        await auth.deleteUser(userRecord.uid);
-      } catch (deleteError) {
-        console.error(
-          "Could not roll back Firebase Auth user:",
-          deleteError
-        );
-      }
-
-      throw error;
-    }
+    });
   } catch (error) {
     console.error("Signup error:", error);
 
     res.status(500).json({
       success: false,
-      error: "Failed to create account"
-    });
-  }
-});
-
-// ==================================================
-// LOGIN
-// ==================================================
-
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const username = cleanUsername(req.body.username);
-    const password = String(req.body.password || "");
-
-    if (!username || !password) {
-      return res.status(400).json({
-        error: "Username and password are required"
-      });
-    }
-
-    const profileQuery = await db
-      .collection("profiles")
-      .where(
-        "username_lower",
-        "==",
-        username.toLowerCase()
-      )
-      .limit(1)
-      .get();
-
-    if (profileQuery.empty) {
-      return res.status(401).json({
-        error: "Invalid username or password"
-      });
-    }
-
-    const profile = profileQuery.docs[0].data();
-
-    const apiKey =
-        process.env.FIREBASE_WEB_API_KEY ||
-        "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
-
-    if (!apiKey) {
-      return res.status(500).json({
-        error: "Missing FIREBASE_WEB_API_KEY"
-      });
-    }
-
-    const response = await fetch(
-      "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" +
-        encodeURIComponent(apiKey),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          email: profile.auth_email,
-          password,
-          returnSecureToken: true
-        })
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Firebase login error:", data);
-
-      return res.status(401).json({
-        error: "Invalid username or password"
-      });
-    }
-
-    await createSession(res, data.idToken);
-
-    res.json({
-      success: true,
-      user: {
-        uid: data.localId,
-        username: profile.username,
-        email: profile.email || ""
-      }
-    });
-  } catch (error) {
-    console.error("Login error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Login failed"
+      error: error.message || "Failed to create account"
     });
   }
 });
@@ -437,44 +292,20 @@ app.get("/api/auth/me", async (req, res) => {
     const user = await getCurrentUser(req);
 
     if (!user) {
-      return res.status(401).json({
-        authenticated: false
-      });
+      return res.json({ loggedIn: false });
     }
 
-    const profileSnapshot = await db
-      .collection("profiles")
-      .doc(user.uid)
-      .get();
-
-    if (!profileSnapshot.exists) {
-      return res.json({
-        authenticated: true,
-        user: {
-          uid: user.uid,
-          username: user.name || "",
-          email: user.email || ""
-        }
-      });
-    }
-
-    const profile = profileSnapshot.data();
+    const profile = await getProfileByUid(user.uid);
 
     res.json({
-      authenticated: true,
-      user: {
+      loggedIn: true,
+      user: profile || {
         uid: user.uid,
-        username: profile.username || user.name || "",
-        email: profile.email || ""
+        email: user.email || ""
       }
     });
-  } catch (error) {
-    console.error("Auth/me error:", error);
-
-    res.status(500).json({
-      authenticated: false,
-      error: "Failed to get account"
-    });
+  } catch {
+    res.json({ loggedIn: false });
   }
 });
 
@@ -483,12 +314,7 @@ app.get("/api/auth/me", async (req, res) => {
 // ==================================================
 
 app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie("session", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/"
-  });
+  res.clearCookie("session");
 
   res.json({
     success: true
@@ -496,43 +322,92 @@ app.post("/api/auth/logout", (req, res) => {
 });
 
 // ==================================================
-// PLAYERS
+// PROFILES
 // ==================================================
 
-app.get("/api/players", async (req, res) => {
+app.get("/api/profiles/:id", async (req, res) => {
   try {
-    const snapshot = await db
-      .collection("profiles")
-      .orderBy("created_at", "desc")
-      .limit(50)
+    const profile = await getProfileByUserId(req.params.id);
+
+    if (!profile) {
+      return res.status(404).json({
+        found: false,
+        error: "Profile not found"
+      });
+    }
+
+    const postsSnap = await db
+      .collection("profile_posts")
+      .where("profile_user_id", "==", Number(profile.user_id))
       .get();
 
-    const players = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        uid: data.uid || doc.id,
-        username: data.username || "",
-        display_name:
-          data.display_name ||
-          data.username ||
-          "",
-        bio: data.bio || "",
-        avatar_url: data.avatar_url || "",
-        created_at: data.created_at || null
-      };
-    });
+    const levelsSnap = await db
+      .collection("levels")
+      .where("creator_user_id", "==", Number(profile.user_id))
+      .get();
 
     res.json({
-      players
+      found: true,
+      profile: {
+        user_id: profile.user_id,
+        username: profile.username || "",
+        display_name: profile.display_name || profile.username || "",
+        bio: profile.bio || "",
+        avatar_url: profile.avatar_url || "",
+        created_at: profile.created_at || null
+      },
+      posts: postsSnap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })),
+      levels: levelsSnap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
     });
   } catch (error) {
-    console.error("Players error:", error);
+    console.error("Profile error:", error);
 
     res.status(500).json({
-      error: "Failed to load players",
-      players: []
+      found: false,
+      error: "Failed to load profile"
+    });
+  }
+});
+
+app.post("/api/profile/update", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const updates = {
+      updated_at: FieldValue.serverTimestamp()
+    };
+
+    if (req.body.display_name !== undefined) {
+      updates.display_name = clean(req.body.display_name).slice(0, 40);
+    }
+
+    if (req.body.bio !== undefined) {
+      updates.bio = clean(req.body.bio).slice(0, 500);
+    }
+
+    if (req.body.avatar_url !== undefined) {
+      updates.avatar_url = clean(req.body.avatar_url).slice(0, 1000);
+    }
+
+    await db
+      .collection("profiles")
+      .doc(user.uid)
+      .set(updates, { merge: true });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Profile update error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to update profile"
     });
   }
 });
@@ -543,94 +418,161 @@ app.get("/api/players", async (req, res) => {
 
 app.get("/api/posts", async (req, res) => {
   try {
-    const snapshot = await db
+    const snap = await db
       .collection("posts")
       .orderBy("created_at", "desc")
       .limit(50)
       .get();
 
-    const posts = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        author: data.author || data.username || "",
-        text: data.text || "",
-        uid: data.uid || "",
-        created_at: data.created_at || null
-      };
-    });
-
     res.json({
-      posts
+      found: true,
+      posts: snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
     });
   } catch (error) {
-    console.error("Posts read error:", error);
+    console.error("Posts error:", error);
 
     res.status(500).json({
-      error: "Failed to load posts",
+      found: false,
       posts: []
     });
   }
 });
 
-app.post("/api/posts", async (req, res) => {
+app.get("/api/posts/:id", async (req, res) => {
   try {
-    const user = await requireUser(req, res);
+    const snap = await db
+      .collection("posts")
+      .doc(String(req.params.id))
+      .get();
 
-    if (!user) {
-      return;
+    if (!snap.exists) {
+      return res.status(404).json({
+        found: false,
+        title: "No post found",
+        author: "No username found",
+        text: "no post",
+        replies: []
+      });
     }
 
-    const text = String(req.body.text || "").trim();
+    const repliesSnap = await db
+      .collection("post_replies")
+      .where("post_id", "==", String(req.params.id))
+      .get();
+
+    res.json({
+      found: true,
+      post: {
+        id: snap.id,
+        ...snap.data()
+      },
+      replies: repliesSnap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+    });
+  } catch (error) {
+    console.error("Post error:", error);
+
+    res.status(500).json({
+      found: false,
+      error: "Failed to load post"
+    });
+  }
+});
+
+app.post("/api/posts", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const profile = await getProfileByUid(user.uid);
+    const text = clean(req.body.text);
 
     if (!text) {
       return res.status(400).json({
+        success: false,
         error: "Post text is required"
       });
     }
 
-    if (text.length > 2000) {
-      return res.status(400).json({
-        error: "Post is too long"
-      });
-    }
+    const ref = db.collection("posts").doc();
 
-    const profileSnapshot = await db
-      .collection("profiles")
-      .doc(user.uid)
-      .get();
-
-    const profile = profileSnapshot.exists
-      ? profileSnapshot.data()
-      : {};
-
-    const username =
-      profile.username ||
-      user.name ||
-      user.email ||
-      "Player";
-
-    const postRef = db.collection("posts").doc();
-
-    await postRef.set({
+    await ref.set({
       uid: user.uid,
-      author: username,
-      username,
-      text,
+      user_id: profile?.user_id || null,
+      author: profile?.display_name || profile?.username || "Player",
+      avatar_url: profile?.avatar_url || "",
+      text: text.slice(0, 2000),
       created_at: FieldValue.serverTimestamp()
     });
 
-    res.status(201).json({
+    res.json({
       success: true,
-      id: postRef.id
+      id: ref.id
     });
   } catch (error) {
-    console.error("Post create error:", error);
+    console.error("Create post error:", error);
 
     res.status(500).json({
       success: false,
       error: "Failed to create post"
+    });
+  }
+});
+
+app.post("/api/posts/:id/replies", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const postSnap = await db
+      .collection("posts")
+      .doc(String(req.params.id))
+      .get();
+
+    if (!postSnap.exists) {
+      return res.status(404).json({
+        success: false,
+        error: "Post not found"
+      });
+    }
+
+    const profile = await getProfileByUid(user.uid);
+    const text = clean(req.body.text);
+
+    if (!text) {
+      return res.status(400).json({
+        success: false,
+        error: "Reply text is required"
+      });
+    }
+
+    const ref = db.collection("post_replies").doc();
+
+    await ref.set({
+      post_id: String(req.params.id),
+      uid: user.uid,
+      user_id: profile?.user_id || null,
+      author: profile?.display_name || profile?.username || "Player",
+      avatar_url: profile?.avatar_url || "",
+      text: text.slice(0, 2000),
+      created_at: FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      id: ref.id
+    });
+  } catch (error) {
+    console.error("Reply error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to create reply"
     });
   }
 });
@@ -641,98 +583,106 @@ app.post("/api/posts", async (req, res) => {
 
 app.get("/api/levels", async (req, res) => {
   try {
-    const snapshot = await db
+    const snap = await db
       .collection("levels")
       .orderBy("created_at", "desc")
-      .limit(100)
+      .limit(50)
       .get();
 
-    const levels = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        name: data.name || data.title || "",
-        creator:
-          data.creator ||
-          data.username ||
-          "",
-        description: data.description || "",
-        uid: data.uid || "",
-        created_at: data.created_at || null
-      };
-    });
-
     res.json({
-      levels
+      found: true,
+      levels: snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
     });
   } catch (error) {
-    console.error("Levels read error:", error);
+    console.error("Levels error:", error);
 
     res.status(500).json({
-      error: "Failed to load levels",
+      found: false,
       levels: []
     });
   }
 });
 
-app.post("/api/levels", async (req, res) => {
+app.get("/api/levels/:id", async (req, res) => {
   try {
-    const user = await requireUser(req, res);
+    const snap = await db
+      .collection("levels")
+      .doc(String(req.params.id))
+      .get();
 
-    if (!user) {
-      return;
+    if (!snap.exists) {
+      return res.status(404).json({
+        found: false,
+        id: req.params.id,
+        name: "No level found",
+        description: "no level",
+        creator: "No creator found",
+        creator_username: "no username",
+        creator_user_id: "?",
+        hearts: 0,
+        likes: 0,
+        followers: 0,
+        plays: 0
+      });
     }
 
-    const name = String(req.body.name || "").trim();
-    const description =
-      String(req.body.description || "").trim();
+    res.json({
+      found: true,
+      id: snap.id,
+      ...snap.data()
+    });
+  } catch (error) {
+    console.error("Level error:", error);
+
+    res.status(500).json({
+      found: false,
+      error: "Failed to load level"
+    });
+  }
+});
+
+app.post("/api/levels", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const profile = await getProfileByUid(user.uid);
+    const name = clean(req.body.name);
 
     if (!name) {
       return res.status(400).json({
+        success: false,
         error: "Level name is required"
       });
     }
 
-    if (name.length > 120) {
-      return res.status(400).json({
-        error: "Level name is too long"
-      });
-    }
+    const ref = db.collection("levels").doc();
 
-    const profileSnapshot = await db
-      .collection("profiles")
-      .doc(user.uid)
-      .get();
-
-    const profile = profileSnapshot.exists
-      ? profileSnapshot.data()
-      : {};
-
-    const username =
-      profile.username ||
-      user.name ||
-      user.email ||
-      "Player";
-
-    const levelRef = db.collection("levels").doc();
-
-    await levelRef.set({
+    await ref.set({
+      name: name.slice(0, 100),
+      description: clean(req.body.description).slice(0, 2000),
+      thumbnail_url: clean(req.body.thumbnail_url).slice(0, 1000),
       uid: user.uid,
-      name,
-      title: name,
-      creator: username,
-      username,
-      description,
-      created_at: FieldValue.serverTimestamp()
+      creator_user_id: profile?.user_id || null,
+      creator: profile?.display_name || profile?.username || "Player",
+      creator_username: profile?.username || "Player",
+      hearts: 0,
+      likes: 0,
+      followers: 0,
+      plays: 0,
+      created_at: FieldValue.serverTimestamp(),
+      updated_at: FieldValue.serverTimestamp()
     });
 
-    res.status(201).json({
+    res.json({
       success: true,
-      id: levelRef.id
+      id: ref.id
     });
   } catch (error) {
-    console.error("Level create error:", error);
+    console.error("Create level error:", error);
 
     res.status(500).json({
       success: false,
@@ -747,23 +697,19 @@ app.post("/api/levels", async (req, res) => {
 
 app.get("/api/data/:collection/:id", async (req, res) => {
   try {
-    const { collection, id } = req.params;
-
-    const snapshot = await db
-      .collection(collection)
-      .doc(id)
+    const snap = await db
+      .collection(req.params.collection)
+      .doc(req.params.id)
       .get();
 
-    if (!snapshot.exists) {
-      return res.status(404).json({
-        found: false
-      });
+    if (!snap.exists) {
+      return res.status(404).json({ found: false });
     }
 
     res.json({
       found: true,
-      id: snapshot.id,
-      data: snapshot.data()
+      id: snap.id,
+      data: snap.data()
     });
   } catch (error) {
     console.error("Firestore read error:", error);
@@ -776,28 +722,13 @@ app.get("/api/data/:collection/:id", async (req, res) => {
 });
 
 app.post("/api/data/:collection/:id", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
   try {
-    const user = await requireUser(req, res);
-
-    if (!user) {
-      return;
-    }
-
-    const { collection, id } = req.params;
-
-    if (
-      !req.body ||
-      typeof req.body !== "object" ||
-      Array.isArray(req.body)
-    ) {
-      return res.status(400).json({
-        error: "JSON object required"
-      });
-    }
-
     await db
-      .collection(collection)
-      .doc(id)
+      .collection(req.params.collection)
+      .doc(req.params.id)
       .set(
         {
           ...req.body,
@@ -808,8 +739,8 @@ app.post("/api/data/:collection/:id", async (req, res) => {
 
     res.json({
       success: true,
-      collection,
-      id
+      collection: req.params.collection,
+      id: req.params.id
     });
   } catch (error) {
     console.error("Firestore write error:", error);
@@ -822,25 +753,20 @@ app.post("/api/data/:collection/:id", async (req, res) => {
 });
 
 app.delete("/api/data/:collection/:id", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
   try {
-    const user = await requireUser(req, res);
-
-    if (!user) {
-      return;
-    }
-
-    const { collection, id } = req.params;
-
     await db
-      .collection(collection)
-      .doc(id)
+      .collection(req.params.collection)
+      .doc(req.params.id)
       .delete();
 
     res.json({
       success: true,
       deleted: true,
-      collection,
-      id
+      collection: req.params.collection,
+      id: req.params.id
     });
   } catch (error) {
     console.error("Firestore delete error:", error);
@@ -856,12 +782,10 @@ app.delete("/api/data/:collection/:id", async (req, res) => {
 // STATIC WEBSITE
 // ==================================================
 
-const publicPath = path.join(__dirname);
-
-app.use(express.static(publicPath));
+app.use(express.static(__dirname));
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(publicPath, "index.html"));
+  res.sendFile(__dirname + "/index.html");
 });
 
 // ==================================================
