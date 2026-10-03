@@ -2,28 +2,28 @@ const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
 
-const { initializeApp, cert } = require("firebase-admin/app");
+const { initializeApp, cert, getApps } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const {
   getFirestore,
   FieldValue
 } = require("firebase-admin/firestore");
 
-// ==================================================
-// LittleBigAdventure
-// Firebase-first server
+// ============================================================
+// LittleBigAdventure Server
+// Firebase watchdog + retry + timeout architecture
 //
-// Flow:
-// Browser -> Render server -> Firebase
+// Browser
+//   |
+//   v
+// LBA Server
+//   |
+//   +--> Firebase reachable -> normal operation
+//   |
+//   +--> Firebase offline -> retry -> watchdog recovery
 //
-// For important Firebase operations the server:
-// 1. connects
-// 2. reads current data
-// 3. validates it
-// 4. writes
-// 5. reads back to verify
-// 6. retries if the operation fails
-// ==================================================
+// The Render server itself stays online when Firebase is down.
+// ============================================================
 
 const app = express();
 
@@ -31,152 +31,456 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ==================================================
-// SETTINGS
-// ==================================================
+// ============================================================
+// CONFIG
+// ============================================================
 
-const PORT = process.env.PORT || 10000;
-const RETRIES = Math.max(1, Number(process.env.FIREBASE_RETRIES || 3));
-const RETRY_DELAY = Math.max(100, Number(process.env.FIREBASE_RETRY_DELAY_MS || 700));
+const PORT = Number(process.env.PORT || 10000);
+
+const FIREBASE_RETRIES = Math.max(
+  1,
+  Number(process.env.FIREBASE_RETRIES || 3)
+);
+
+const FIREBASE_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.FIREBASE_TIMEOUT_MS || 8000)
+);
+
+const FIREBASE_RETRY_BASE_MS = Math.max(
+  100,
+  Number(process.env.FIREBASE_RETRY_BASE_MS || 750)
+);
+
+const FIREBASE_WATCHDOG_MS = Math.max(
+  5000,
+  Number(process.env.FIREBASE_WATCHDOG_MS || 30000)
+);
 
 const SESSION_COOKIE = "lba_session";
 const SERVICE_NAME = "LittleBigAdventure";
 
-// ==================================================
-// FIREBASE ADMIN
-// ==================================================
+// ============================================================
+// FIREBASE STATE
+// ============================================================
 
-if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
+let firebaseReady = false;
+let firebaseChecking = false;
+let firebaseLastError = null;
+let firebaseLastSuccessfulCheck = null;
+
+let db = null;
+let auth = null;
+
+// ============================================================
+// LOGGING
+// ============================================================
+
+function log(message) {
+  console.log(`[LBA] ${message}`);
 }
 
-let serviceAccount;
-
-try {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-} catch (error) {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
+function firebaseLog(message) {
+  console.log(`[Firebase] ${message}`);
 }
 
-initializeApp({
-  credential: cert(serviceAccount)
-});
+// ============================================================
+// TIMEOUT
+// ============================================================
 
-const auth = getAuth();
-const db = getFirestore();
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => {
+        const error = new Error(
+          `${label || "Firebase request"} timed out after ${ms}ms`
+        );
+        error.code = "firebase-timeout";
+        reject(error);
+      }, ms);
 
-// ==================================================
-// HELPERS
-// ==================================================
+      // Do not keep Node alive only because of the timeout timer.
+      timer.unref?.();
+    })
+  ]);
+}
+
+// ============================================================
+// BACKOFF
+// ============================================================
+
+function retryDelay(attempt) {
+  // 750ms, 1500ms, 3000ms...
+  return FIREBASE_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function errorMessage(error) {
-  return error && error.message ? error.message : String(error);
+// ============================================================
+// ENVIRONMENT VALIDATION
+// ============================================================
+
+function validateEnvironment() {
+  const problems = [];
+
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    problems.push("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
+  }
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      const serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+      );
+
+      if (!serviceAccount.project_id && !serviceAccount.projectId) {
+        problems.push("Firebase service account is missing project_id");
+      }
+
+      if (!serviceAccount.client_email && !serviceAccount.clientEmail) {
+        problems.push("Firebase service account is missing client_email");
+      }
+
+      if (!serviceAccount.private_key && !serviceAccount.privateKey) {
+        problems.push("Firebase service account is missing private_key");
+      }
+    } catch (error) {
+      problems.push(
+        "FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON"
+      );
+    }
+  }
+
+  return problems;
 }
 
-function isRetryable(error) {
-  const code = String(
-    error?.code ||
-    error?.status ||
-    error?.response?.status ||
-    ""
-  ).toLowerCase();
+// ============================================================
+// FIREBASE INITIALIZATION
+// ============================================================
 
-  const message = errorMessage(error).toLowerCase();
+function initializeFirebaseOnce() {
+  const problems = validateEnvironment();
 
-  if (code.includes("permission-denied")) return false;
-  if (code.includes("unauthenticated")) return false;
-  if (code.includes("invalid-argument")) return false;
-  if (code.includes("not-found")) return false;
-  if (code.includes("already-exists")) return false;
+  if (problems.length) {
+    problems.forEach(problem => {
+      console.error(`[Firebase] CONFIG ERROR: ${problem}`);
+    });
 
-  if (message.includes("invalid password")) return false;
-  if (message.includes("invalid username")) return false;
-  if (message.includes("email already exists")) return false;
+    // Do NOT crash Render.
+    firebaseReady = false;
+    firebaseLastError = new Error(
+      "Firebase configuration is incomplete"
+    );
 
-  return true;
+    return false;
+  }
+
+  try {
+    let firebaseApp;
+
+    if (getApps().length > 0) {
+      firebaseApp = getApps()[0];
+      log("Firebase app already initialized; reusing it.");
+    } else {
+      const serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+      );
+
+      firebaseApp = initializeApp({
+        credential: cert(serviceAccount)
+      });
+
+      log("Firebase initialized once.");
+    }
+
+    db = getFirestore(firebaseApp);
+    auth = getAuth(firebaseApp);
+
+    return true;
+  } catch (error) {
+    firebaseReady = false;
+    firebaseLastError = error;
+
+    console.error(
+      "[Firebase] INITIALIZATION ERROR:",
+      error.message
+    );
+
+    return false;
+  }
 }
 
-// Run a Firebase operation again when it fails.
-// This is deliberately small and predictable so Render does not get
-// stuck in an endless retry loop.
-async function firebaseRetry(label, operation, attempts = RETRIES) {
+// ============================================================
+// FIREBASE RETRY ENGINE
+// ============================================================
+//
+// Every Firebase operation goes through this function.
+//
+// Attempt 1 -> failed
+// wait
+// Attempt 2 -> failed
+// wait longer
+// Attempt 3 -> connected
+//
+// A failed operation does not crash the Render process.
+// ============================================================
+
+async function firebaseRetry(label, operation) {
+  if (!db || !auth) {
+    const error = new Error("Firebase is not initialized");
+    error.code = "firebase-not-initialized";
+    throw error;
+  }
+
   let lastError;
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  for (let attempt = 1; attempt <= FIREBASE_RETRIES; attempt++) {
     try {
-      return await operation();
+      const result = await withTimeout(
+        Promise.resolve().then(operation),
+        FIREBASE_TIMEOUT_MS,
+        label
+      );
+
+      firebaseReady = true;
+      firebaseLastError = null;
+      firebaseLastSuccessfulCheck = new Date();
+
+      if (!firebaseChecking) {
+        firebaseLog(
+          `${label}: connected on attempt ${attempt}`
+        );
+      }
+
+      return result;
     } catch (error) {
       lastError = error;
 
-      console.error(
-        `[Firebase] ${label} failed (${attempt}/${attempts}):`,
-        errorMessage(error)
+      firebaseReady = false;
+      firebaseLastError = error;
+
+      firebaseLog(
+        `${label}: Attempt ${attempt}/${FIREBASE_RETRIES} failed: ${error.message}`
       );
 
-      if (attempt >= attempts || !isRetryable(error)) {
-        break;
-      }
+      if (attempt < FIREBASE_RETRIES) {
+        const delay = retryDelay(attempt);
 
-      await sleep(RETRY_DELAY * attempt);
+        firebaseLog(
+          `${label}: retrying in ${delay}ms`
+        );
+
+        await sleep(delay);
+      }
     }
   }
 
   throw lastError;
 }
 
-// Read a Firestore document with retries.
+// ============================================================
+// FIREBASE HEALTH CHECK
+// ============================================================
+
+async function checkFirebase(label = "health check") {
+  if (firebaseChecking) {
+    return firebaseReady;
+  }
+
+  firebaseChecking = true;
+
+  try {
+    if (!db || !auth) {
+      if (!initializeFirebaseOnce()) {
+        return false;
+      }
+    }
+
+    // A tiny read verifies that the Admin SDK can actually talk
+    // to Firestore instead of merely being initialized locally.
+    await firebaseRetry(
+      label,
+      async () => {
+        const ref = db.collection("_system").doc("server_health");
+        const snapshot = await ref.get();
+
+        return snapshot.exists;
+      }
+    );
+
+    firebaseReady = true;
+    firebaseLastError = null;
+    firebaseLastSuccessfulCheck = new Date();
+
+    return true;
+  } catch (error) {
+    firebaseReady = false;
+    firebaseLastError = error;
+
+    firebaseLog(
+      `Firebase OFFLINE: ${error.message}`
+    );
+
+    return false;
+  } finally {
+    firebaseChecking = false;
+  }
+}
+
+// ============================================================
+// STARTUP FIREBASE TEST
+// ============================================================
+
+async function startupFirebaseTest() {
+  log("Testing Firebase before declaring the server ready...");
+
+  const connected = await checkFirebase("startup test");
+
+  if (connected) {
+    console.log("Firebase: CONNECTED");
+    console.log("Database: READY");
+  } else {
+    console.log("Firebase: OFFLINE");
+    console.log("Database: TEMPORARILY UNAVAILABLE");
+    console.log("Server: ONLINE");
+    console.log("Watchdog: RECONNECTING");
+  }
+}
+
+// ============================================================
+// WATCHDOG
+// ============================================================
+//
+// This does NOT restart the server.
+// It periodically checks Firebase and automatically marks it
+// online again when Firebase returns.
+// ============================================================
+
+function startFirebaseWatchdog() {
+  setInterval(async () => {
+    if (firebaseReady) {
+      // A light check keeps the health state current.
+      await checkFirebase("watchdog");
+      return;
+    }
+
+    firebaseLog(
+      "Watchdog: Firebase is offline. Attempting recovery..."
+    );
+
+    const recovered = await checkFirebase(
+      "watchdog recovery"
+    );
+
+    if (recovered) {
+      console.log("Firebase: CONNECTED");
+      console.log("Database: READY");
+      console.log("Watchdog: RECOVERY COMPLETE");
+    } else {
+      console.log("Firebase: STILL OFFLINE");
+      console.log("Server: STILL ONLINE");
+      console.log("Watchdog: WILL TRY AGAIN");
+    }
+  }, FIREBASE_WATCHDOG_MS).unref?.();
+}
+
+// ============================================================
+// FIREBASE AVAILABILITY MIDDLEWARE
+// ============================================================
+//
+// Privileged Firebase routes do not proceed while Firebase is
+// known to be unavailable.
+//
+// The server itself remains online.
+// ============================================================
+
+async function requireFirebase(req, res, next) {
+  if (firebaseReady) {
+    return next();
+  }
+
+  const recovered = await checkFirebase("request recovery");
+
+  if (!recovered) {
+    return res.status(503).json({
+      success: false,
+      firebase: false,
+      error: "Firebase temporarily unavailable",
+      retrying: true
+    });
+  }
+
+  next();
+}
+
+// ============================================================
+// FIRESTORE HELPERS
+// ============================================================
+
 async function readDoc(collection, id) {
   return firebaseRetry(
     `READ ${collection}/${id}`,
-    async () => {
-      const snapshot = await db.collection(collection).doc(String(id)).get();
-      return snapshot;
-    }
+    () => db
+      .collection(collection)
+      .doc(String(id))
+      .get()
   );
 }
 
-// Write a Firestore document and immediately read it back.
-// This is the main "make sure it actually worked" mechanism.
-async function writeDocAndVerify(collection, id, data, options = {}) {
+async function writeDocAndVerify(
+  collection,
+  id,
+  data,
+  options = {}
+) {
   return firebaseRetry(
-    `WRITE+VERIFY ${collection}/${id}`,
+    `WRITE ${collection}/${id}`,
     async () => {
-      const ref = db.collection(collection).doc(String(id));
+      const ref = db
+        .collection(collection)
+        .doc(String(id));
 
       await ref.set(data, options);
 
-      const check = await ref.get();
+      // Verify the actual saved document.
+      const saved = await ref.get();
 
-      if (!check.exists) {
-        throw new Error(
-          `Firebase write verification failed for ${collection}/${id}`
+      if (!saved.exists) {
+        const error = new Error(
+          `Write verification failed for ${collection}/${id}`
         );
+
+        error.code = "write-verification-failed";
+        throw error;
       }
 
-      return check;
+      return saved;
     }
   );
 }
 
-// Delete and verify the document is gone.
 async function deleteDocAndVerify(collection, id) {
   return firebaseRetry(
-    `DELETE+VERIFY ${collection}/${id}`,
+    `DELETE ${collection}/${id}`,
     async () => {
-      const ref = db.collection(collection).doc(String(id));
+      const ref = db
+        .collection(collection)
+        .doc(String(id));
 
       await ref.delete();
 
       const check = await ref.get();
 
       if (check.exists) {
-        throw new Error(
-          `Firebase delete verification failed for ${collection}/${id}`
+        const error = new Error(
+          `Delete verification failed for ${collection}/${id}`
         );
+
+        error.code = "delete-verification-failed";
+        throw error;
       }
 
       return true;
@@ -184,8 +488,15 @@ async function deleteDocAndVerify(collection, id) {
   );
 }
 
+// ============================================================
+// DATA HELPERS
+// ============================================================
+
 function clean(value, fallback = "") {
-  if (value === undefined || value === null) return fallback;
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
   return String(value).trim();
 }
 
@@ -193,75 +504,145 @@ function normalizeUsername(value) {
   return clean(value).toLowerCase();
 }
 
+function numberOrZero(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+// ============================================================
+// SAFE PUBLIC DATA
+// ============================================================
+
 function publicProfile(data, idOverride = null) {
-  if (!data) return null;
+  data = data || {};
 
   return {
     id: data.user_id ?? idOverride ?? data.uid ?? null,
     user_id: data.user_id ?? idOverride ?? null,
-    uid: data.uid ?? null,
-    username: data.username || data.display_name || "No username found",
-    display_name: data.display_name || data.username || "No username found",
-    bio: data.bio || "no username",
-    avatar_url: data.avatar_url || "",
+    uid: data.uid || "",
+    username:
+      clean(data.username) ||
+      clean(data.display_name) ||
+      "Unknown User",
+    display_name:
+      clean(data.display_name) ||
+      clean(data.username) ||
+      "Unknown User",
+    bio: clean(data.bio, "No bio"),
+    avatar_url: clean(data.avatar_url),
     created_at: data.created_at || null,
     updated_at: data.updated_at || null,
-    followers: Number(data.followers || 0),
-    following: Number(data.following || 0),
-    friends: Number(data.friends || 0)
+    followers: numberOrZero(data.followers),
+    following: numberOrZero(data.following),
+    friends: numberOrZero(data.friends)
   };
 }
 
 function publicLevel(data, id) {
-  if (!data) return null;
+  data = data || {};
 
   return {
     id: data.id || data.level_id || id,
     level_id: data.level_id || data.id || id,
-    name: data.name || "No level found",
-    description: data.description || "no level",
-    thumbnail_url: data.thumbnail_url || data.thumbnail || "",
-    creator: data.creator || data.creator_username || data.username || "No creator found",
-    creator_username: data.creator_username || data.creator || data.username || "no username",
+    title: clean(
+      data.title ||
+      data.name,
+      "Untitled Adventure"
+    ),
+    name: clean(
+      data.name ||
+      data.title,
+      "Untitled Adventure"
+    ),
+    description: clean(
+      data.description,
+      "No description"
+    ),
+    thumbnail_url: clean(
+      data.thumbnail_url ||
+      data.thumbnail
+    ),
+    creator:
+      clean(
+        data.creator ||
+        data.creator_username ||
+        data.username
+      ) || "Unknown Creator",
+    creator_username:
+      clean(
+        data.creator_username ||
+        data.creator ||
+        data.username
+      ) || "Unknown Creator",
     creator_user_id:
       data.creator_user_id ??
       data.user_id ??
       data.uid ??
-      "?",
-    creator_uid: data.creator_uid || data.uid || "",
-    hearts: Number(data.hearts || 0),
-    likes: Number(data.likes || 0),
-    followers: Number(data.followers || 0),
-    plays: Number(data.plays || 0),
+      null,
+    creator_uid:
+      data.creator_uid ||
+      data.uid ||
+      "",
+    hearts: numberOrZero(data.hearts),
+    likes: numberOrZero(data.likes),
+    followers: numberOrZero(data.followers),
+    plays: numberOrZero(data.plays),
     created_at: data.created_at || null,
     updated_at: data.updated_at || null
   };
 }
 
 function publicPost(data, id) {
-  if (!data) return null;
+  data = data || {};
 
   return {
     id: data.id || data.post_id || id,
     post_id: data.post_id || data.id || id,
     uid: data.uid || "",
-    user_id: data.user_id || data.profile_user_id || data.uid || "?",
-    author: data.author || data.username || "No username found",
-    username: data.username || data.author || "No username found",
-    avatar_url: data.avatar_url || "",
-    title: data.title || "",
-    text: data.text || data.content || "no post",
-    content: data.content || data.text || "no post",
-    created_at: data.created_at || data.date || null,
+    user_id:
+      data.user_id ||
+      data.profile_user_id ||
+      data.uid ||
+      null,
+    author:
+      clean(
+        data.author ||
+        data.username
+      ) || "Unknown User",
+    username:
+      clean(
+        data.username ||
+        data.author
+      ) || "Unknown User",
+    avatar_url: clean(data.avatar_url),
+    title: clean(data.title),
+    text: clean(
+      data.text ||
+      data.content,
+      "No post"
+    ),
+    content: clean(
+      data.content ||
+      data.text,
+      "No post"
+    ),
+    created_at:
+      data.created_at ||
+      data.date ||
+      null,
     updated_at: data.updated_at || null
   };
 }
 
-// ==================================================
-// AUTH HELPERS
-// ==================================================
+// ============================================================
+// AUTH
+// ============================================================
 
 async function getCurrentUser(req) {
+  if (!auth) {
+    return null;
+  }
+
   const session = req.cookies?.[SESSION_COOKIE];
 
   if (session) {
@@ -270,27 +651,29 @@ async function getCurrentUser(req) {
         "VERIFY SESSION",
         () => auth.verifySessionCookie(session, true)
       );
-    } catch (error) {
-      // Continue and try bearer headers.
+    } catch (_) {
+      // Try Bearer token below.
     }
   }
 
-  const header = req.headers.authorization || "";
-  const firebaseToken =
-    header.startsWith("Bearer ")
-      ? header.slice(7)
+  const authorization =
+    req.headers.authorization || "";
+
+  const token =
+    authorization.startsWith("Bearer ")
+      ? authorization.slice(7)
       : req.headers["x-firebase-token"];
 
-  if (!firebaseToken) {
+  if (!token) {
     return null;
   }
 
   try {
     return await firebaseRetry(
       "VERIFY FIREBASE TOKEN",
-      () => auth.verifyIdToken(String(firebaseToken), true)
+      () => auth.verifyIdToken(String(token), true)
     );
-  } catch (error) {
+  } catch (_) {
     return null;
   }
 }
@@ -303,6 +686,7 @@ async function requireUser(req, res) {
       success: false,
       error: "Login required"
     });
+
     return null;
   }
 
@@ -313,22 +697,25 @@ async function createSession(res, idToken) {
   const expiresIn = 1000 * 60 * 60 * 24 * 5;
 
   const sessionCookie = await firebaseRetry(
-    "CREATE SESSION COOKIE",
-    () => auth.createSessionCookie(idToken, { expiresIn })
+    "CREATE SESSION",
+    () => auth.createSessionCookie(
+      idToken,
+      { expiresIn }
+    )
   );
 
-  res.cookie(SESSION_COOKIE, sessionCookie, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    maxAge: expiresIn,
-    path: "/"
-  });
+  res.cookie(
+    SESSION_COOKIE,
+    sessionCookie,
+    {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: expiresIn,
+      path: "/"
+    }
+  );
 }
-
-// ==================================================
-// FIREBASE WEB AUTH REST
-// ==================================================
 
 async function signInWithPassword(email, password) {
   const apiKey =
@@ -340,36 +727,38 @@ async function signInWithPassword(email, password) {
   }
 
   return firebaseRetry(
-    "FIREBASE PASSWORD SIGN-IN",
+    "PASSWORD SIGN-IN",
     async () => {
-      const response = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            email,
-            password,
-            returnSecureToken: true
-          })
-        }
+      const response = await withTimeout(
+        fetch(
+          "https://identitytoolkit.googleapis.com/v1/" +
+          "accounts:signInWithPassword?key=" +
+          encodeURIComponent(apiKey),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              email,
+              password,
+              returnSecureToken: true
+            })
+          }
+        ),
+        FIREBASE_TIMEOUT_MS,
+        "Firebase Auth sign-in"
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        const message =
+        const error = new Error(
           data?.error?.message ||
-          "Firebase sign-in failed";
+          "Firebase sign-in failed"
+        );
 
-        const error = new Error(message);
-
-        if (response.status >= 400 && response.status < 500) {
-          error.code = "invalid-argument";
-        }
-
+        error.code = "auth-signin-failed";
         throw error;
       }
 
@@ -378,16 +767,18 @@ async function signInWithPassword(email, password) {
   );
 }
 
-// ==================================================
+// ============================================================
 // PROFILE LOOKUP
-// ==================================================
+// ============================================================
 
 async function findProfile(identifier) {
   const value = clean(identifier);
 
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
-  // Direct Firebase UID.
+  // 1. Firebase UID / document ID.
   const direct = await readDoc("profiles", value);
 
   if (direct.exists) {
@@ -397,11 +788,12 @@ async function findProfile(identifier) {
     };
   }
 
-  // Numeric account ID.
+  // 2. Permanent numeric User ID.
   if (/^\d+$/.test(value)) {
     const query = await firebaseRetry(
       `FIND PROFILE USER ID ${value}`,
-      () => db.collection("profiles")
+      () => db
+        .collection("profiles")
         .where("user_id", "==", Number(value))
         .limit(1)
         .get()
@@ -413,44 +805,18 @@ async function findProfile(identifier) {
         data: query.docs[0].data()
       };
     }
-
-    // Older accounts may not have user_id.
-    // Creation order is used as a compatibility fallback.
-    const ordered = await firebaseRetry(
-      `FIND PROFILE BY CREATION ORDER ${value}`,
-      () => db.collection("profiles")
-        .orderBy("created_at", "asc")
-        .get()
-    );
-
-    const index = Number(value) - 1;
-
-    if (index >= 0 && index < ordered.docs.length) {
-      const doc = ordered.docs[index];
-
-      // Repair old profile with its numeric ID.
-      const repaired = await writeDocAndVerify(
-        "profiles",
-        doc.id,
-        {
-          user_id: Number(value),
-          updated_at: FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
-
-      return {
-        id: repaired.id,
-        data: repaired.data()
-      };
-    }
   }
 
-  // Username lookup.
+  // 3. Username.
   const usernameQuery = await firebaseRetry(
     `FIND PROFILE USERNAME ${value}`,
-    () => db.collection("profiles")
-      .where("username_lower", "==", normalizeUsername(value))
+    () => db
+      .collection("profiles")
+      .where(
+        "username_lower",
+        "==",
+        normalizeUsername(value)
+      )
       .limit(1)
       .get()
   );
@@ -465,297 +831,395 @@ async function findProfile(identifier) {
   return null;
 }
 
-// ==================================================
+// ============================================================
 // STATUS
-// ==================================================
+// ============================================================
 
 app.get("/api/status", async (req, res) => {
   res.set("Cache-Control", "no-store");
 
-  try {
-    const serverRef = await readDoc("_system", "server");
-
-    res.json({
-      online: true,
-      service: SERVICE_NAME,
-      firebase: true,
-      firebase_read: true,
-      firebase_document_exists: serverRef.exists,
-      retries: RETRIES
-    });
-  } catch (error) {
-    res.status(503).json({
-      online: false,
-      service: SERVICE_NAME,
-      firebase: false,
-      error: "Firebase is temporarily unavailable"
-    });
+  // Do not hide Firebase outages behind a fake "online".
+  if (!firebaseReady) {
+    await checkFirebase("status recovery");
   }
+
+  res.json({
+    online: true,
+    service: SERVICE_NAME,
+    firebase: firebaseReady,
+    database: firebaseReady,
+    firebase_status:
+      firebaseReady
+        ? "online"
+        : "temporarily_unavailable",
+    reconnecting: !firebaseReady,
+    last_successful_check:
+      firebaseLastSuccessfulCheck,
+    retry_attempts: FIREBASE_RETRIES
+  });
 });
 
-// ==================================================
+// ============================================================
 // FIREBASE TEST
-// READ -> WRITE -> READ BACK
-// ==================================================
+// ============================================================
 
-app.get("/api/firebase-test", async (req, res) => {
-  res.set("Cache-Control", "no-store");
+app.get(
+  "/api/firebase-test",
+  async (req, res) => {
+    const connected =
+      await checkFirebase("manual test");
 
-  try {
-    const before = await readDoc("_system", "server");
-
-    const saved = await writeDocAndVerify(
-      "_system",
-      "server",
-      {
-        online: true,
-        service: SERVICE_NAME,
-        checkedAt: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-
-    const after = await readDoc("_system", "server");
-
-    res.json({
-      connected: true,
-      firestore: true,
-      read_before: before.exists,
-      write_verified: saved.exists,
-      read_after: after.exists,
-      data: after.data()
-    });
-  } catch (error) {
-    console.error("Firebase test failed:", error);
-
-    res.status(503).json({
-      connected: false,
-      firestore: false,
-      error: "Firebase connection failed after retries"
-    });
-  }
-});
-
-// ==================================================
-// SIGN UP
-// ==================================================
-
-app.post("/api/auth/signup", async (req, res) => {
-  try {
-    const username = clean(req.body?.username);
-    const password = String(req.body?.password || "");
-    const confirmPassword = String(req.body?.confirmPassword || "");
-    const email = clean(req.body?.email);
-
-    if (!username) {
-      return res.status(400).json({
-        success: false,
-        error: "Username is required"
+    if (!connected) {
+      return res.status(503).json({
+        connected: false,
+        firestore: false,
+        error:
+          "Firebase is temporarily unavailable"
       });
     }
-
-    if (!/^[A-Za-z0-9_]{3,30}$/.test(username)) {
-      return res.status(400).json({
-        success: false,
-        error: "Username must be 3-30 characters and use letters, numbers, or _"
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        error: "Password must be at least 6 characters"
-      });
-    }
-
-    if (password !== confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        error: "Passwords do not match"
-      });
-    }
-
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid email"
-      });
-    }
-
-    // READ current Firebase state first.
-    const existing = await findProfile(username);
-
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: "Username already exists"
-      });
-    }
-
-    let userRecord;
 
     try {
-      userRecord = await firebaseRetry(
-        "CREATE FIREBASE AUTH USER",
-        () => auth.createUser({
-          email: email || undefined,
-          password,
-          displayName: username
-        })
+      const before = await readDoc(
+        "_system",
+        "server_health"
       );
+
+      const saved =
+        await writeDocAndVerify(
+          "_system",
+          "server_health",
+          {
+            online: true,
+            service: SERVICE_NAME,
+            checked_at:
+              FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        );
+
+      const after = await readDoc(
+        "_system",
+        "server_health"
+      );
+
+      res.json({
+        connected: true,
+        firestore: true,
+        read_before: before.exists,
+        write_verified: saved.exists,
+        read_after: after.exists,
+        data: after.data()
+      });
     } catch (error) {
-      if (String(error.code || "").includes("email-already-exists")) {
+      firebaseReady = false;
+
+      res.status(503).json({
+        connected: false,
+        firestore: false,
+        error:
+          "Firebase test failed after retries"
+      });
+    }
+  }
+);
+
+// ============================================================
+// SIGN UP
+// ============================================================
+
+app.post(
+  "/api/auth/signup",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const username =
+        clean(req.body?.username);
+
+      const password =
+        String(req.body?.password || "");
+
+      const confirmPassword =
+        String(
+          req.body?.confirmPassword || ""
+        );
+
+      const email =
+        clean(req.body?.email);
+
+      if (!/^[A-Za-z0-9_]{3,30}$/.test(username)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Username must be 3-30 characters and use letters, numbers, or _"
+        });
+      }
+
+      if (password.length < 6) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Password must be at least 6 characters"
+        });
+      }
+
+      if (password !== confirmPassword) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Passwords do not match"
+        });
+      }
+
+      // Check before creating anything.
+      const existing =
+        await findProfile(username);
+
+      if (existing) {
         return res.status(409).json({
           success: false,
-          error: "Email already exists"
+          error:
+            "Username already exists"
         });
       }
 
-      throw error;
-    }
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "An email is required for the server login system"
+        });
+      }
 
-    // Assign the next permanent numeric account ID atomically.
-    const counterRef = db.collection("_system").doc("user_counter");
+      let userRecord;
 
-    const userId = await firebaseRetry(
-      "ALLOCATE USER ID",
-      async () => {
-        return db.runTransaction(async transaction => {
-          const snap = await transaction.get(counterRef);
-          const current = Number(snap.exists ? snap.data().next_user_id : 1);
-          const next = Math.max(1, current);
-
-          transaction.set(
-            counterRef,
-            {
-              next_user_id: next + 1,
-              updated_at: FieldValue.serverTimestamp()
-            },
-            { merge: true }
+      try {
+        userRecord =
+          await firebaseRetry(
+            "CREATE AUTH USER",
+            () => auth.createUser({
+              email,
+              password,
+              displayName: username
+            })
           );
+      } catch (error) {
+        if (
+          String(error.code || "")
+            .includes("email-already-exists")
+        ) {
+          return res.status(409).json({
+            success: false,
+            error:
+              "Email already exists"
+          });
+        }
 
-          return next;
+        throw error;
+      }
+
+      // Allocate numeric ID using a transaction.
+      const counterRef =
+        db.collection("_system")
+          .doc("user_counter");
+
+      const userId =
+        await firebaseRetry(
+          "ALLOCATE USER ID",
+          () => db.runTransaction(
+            async transaction => {
+              const snapshot =
+                await transaction.get(
+                  counterRef
+                );
+
+              const next =
+                Math.max(
+                  1,
+                  Number(
+                    snapshot.exists
+                      ? snapshot.data()
+                          .next_user_id
+                      : 1
+                  )
+                );
+
+              transaction.set(
+                counterRef,
+                {
+                  next_user_id: next + 1,
+                  updated_at:
+                    FieldValue.serverTimestamp()
+                },
+                { merge: true }
+              );
+
+              return next;
+            }
+          )
+        );
+
+      const profileData = {
+        uid: userRecord.uid,
+        user_id: userId,
+        username,
+        username_lower:
+          normalizeUsername(username),
+        display_name: username,
+        bio: "No bio",
+        avatar_url: "",
+        email,
+        auth_email: email,
+        followers: 0,
+        following: 0,
+        friends: 0,
+        created_at:
+          FieldValue.serverTimestamp(),
+        updated_at:
+          FieldValue.serverTimestamp()
+      };
+
+      const profile =
+        await writeDocAndVerify(
+          "profiles",
+          userRecord.uid,
+          profileData,
+          { merge: true }
+        );
+
+      const signIn =
+        await signInWithPassword(
+          email,
+          password
+        );
+
+      await createSession(
+        res,
+        signIn.idToken
+      );
+
+      res.json({
+        success: true,
+        user: publicProfile(
+          profile.data,
+          userId
+        )
+      });
+    } catch (error) {
+      console.error(
+        "[Auth] Signup error:",
+        error.message
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Account creation failed after retries"
+      });
+    }
+  }
+);
+
+// ============================================================
+// LOGIN
+// ============================================================
+
+app.post(
+  "/api/auth/login",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const username =
+        clean(req.body?.username);
+
+      const password =
+        String(req.body?.password || "");
+
+      if (!username || !password) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Username and password are required"
         });
       }
-    );
 
-    const profileData = {
-      uid: userRecord.uid,
-      user_id: userId,
-      username,
-      username_lower: normalizeUsername(username),
-      display_name: username,
-      bio: "no username",
-      avatar_url: "",
-      email: email || "",
-      auth_email: email || userRecord.email || "",
-      followers: 0,
-      following: 0,
-      friends: 0,
-      created_at: FieldValue.serverTimestamp(),
-      updated_at: FieldValue.serverTimestamp()
-    };
+      const found =
+        await findProfile(username);
 
-    const profile = await writeDocAndVerify(
-      "profiles",
-      userRecord.uid,
-      profileData,
-      { merge: true }
-    );
+      if (!found) {
+        return res.status(401).json({
+          success: false,
+          error:
+            "Invalid username or password"
+        });
+      }
 
-    // If Firebase Auth was created but the profile write failed,
-    // retrying the whole signup would be unsafe. The server throws,
-    // leaving the Auth user available for repair instead of creating duplicates.
-    const signIn = await signInWithPassword(
-      email || userRecord.email,
-      password
-    );
+      const email =
+        found.data.auth_email ||
+        found.data.email;
 
-    await createSession(res, signIn.idToken);
+      if (!email) {
+        return res.status(500).json({
+          success: false,
+          error:
+            "This account has no login email"
+        });
+      }
 
-    res.json({
-      success: true,
-      user: publicProfile(profile.data, userId)
-    });
-  } catch (error) {
-    console.error("Signup error:", error);
+      const signIn =
+        await signInWithPassword(
+          email,
+          password
+        );
 
-    res.status(500).json({
-      success: false,
-      error: "Account creation failed after retries"
-    });
+      await createSession(
+        res,
+        signIn.idToken
+      );
+
+      res.json({
+        success: true,
+        user: publicProfile(
+          found.data,
+          found.data.user_id
+        )
+      });
+    } catch (error) {
+      console.error(
+        "[Auth] Login error:",
+        error.message
+      );
+
+      res.status(401).json({
+        success: false,
+        error:
+          "Invalid username or password"
+      });
+    }
   }
-});
+);
 
-// ==================================================
-// LOGIN
-// ==================================================
+// ============================================================
+// ME / LOGOUT
+// ============================================================
 
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const username = clean(req.body?.username);
-    const password = String(req.body?.password || "");
+app.get(
+  "/api/auth/me",
+  async (req, res) => {
+    res.set("Cache-Control", "no-store");
 
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        error: "Username and password are required"
+    if (!firebaseReady) {
+      await checkFirebase("auth recovery");
+    }
+
+    if (!firebaseReady) {
+      return res.status(503).json({
+        loggedIn: false,
+        firebase: false
       });
     }
 
-    // READ Firebase profile first.
-    const found = await findProfile(username);
-
-    if (!found) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid username or password"
-      });
-    }
-
-    const profile = found.data;
-    const email = profile.auth_email || profile.email;
-
-    if (!email) {
-      return res.status(500).json({
-        success: false,
-        error: "This account has no login email configured"
-      });
-    }
-
-    const signIn = await signInWithPassword(email, password);
-
-    await createSession(res, signIn.idToken);
-
-    // READ the profile again after login.
-    const verified = await findProfile(profile.uid || found.id);
-
-    res.json({
-      success: true,
-      user: publicProfile(
-        verified?.data || profile,
-        profile.user_id || null
-      )
-    });
-  } catch (error) {
-    console.error("Login error:", error);
-
-    res.status(401).json({
-      success: false,
-      error: "Invalid username or password"
-    });
-  }
-});
-
-// ==================================================
-// CURRENT USER
-// ==================================================
-
-app.get("/api/auth/me", async (req, res) => {
-  res.set("Cache-Control", "no-store");
-
-  try {
-    const user = await getCurrentUser(req);
+    const user =
+      await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
@@ -763,80 +1227,313 @@ app.get("/api/auth/me", async (req, res) => {
       });
     }
 
-    const profile = await findProfile(user.uid);
+    const profile =
+      await findProfile(user.uid);
 
     res.json({
       loggedIn: true,
       user: profile
-        ? publicProfile(profile.data, profile.data.user_id)
+        ? publicProfile(
+            profile.data,
+            profile.data.user_id
+          )
         : {
             uid: user.uid,
-            username: user.name || user.email || "Unknown"
+            username:
+              user.name ||
+              user.email ||
+              "Unknown User"
           }
     });
-  } catch (error) {
-    res.status(401).json({
-      loggedIn: false
+  }
+);
+
+app.post(
+  "/api/auth/logout",
+  (req, res) => {
+    res.clearCookie(
+      SESSION_COOKIE,
+      {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/"
+      }
+    );
+
+    res.json({
+      success: true,
+      loggedOut: true
     });
   }
-});
+);
 
-// ==================================================
-// LOGOUT
-// ==================================================
-
-app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie(SESSION_COOKIE, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/"
-  });
-
-  res.json({
-    success: true,
-    loggedOut: true
-  });
-});
-
-// ==================================================
+// ============================================================
 // PLAYERS
-// ==================================================
+// ============================================================
 
-app.get("/api/players", async (req, res) => {
-  try {
-    const snapshot = await firebaseRetry(
-      "READ PLAYERS",
-      () => db.collection("profiles")
-        .orderBy("created_at", "desc")
-        .limit(50)
+app.get(
+  "/api/players",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await firebaseRetry(
+          "READ PLAYERS",
+          () => db
+            .collection("profiles")
+            .limit(100)
+            .get()
+        );
+
+      const players =
+        snapshot.docs.map(doc =>
+          publicProfile(
+            doc.data(),
+            doc.data().user_id ||
+            doc.id
+          )
+        );
+
+      players.sort(
+        (a, b) =>
+          Number(a.user_id || 0) -
+          Number(b.user_id || 0)
+      );
+
+      res.json(players);
+    } catch (error) {
+      res.status(503).json({
+        error:
+          "Players temporarily unavailable"
+      });
+    }
+  }
+);
+
+// ============================================================
+// PROFILE PAGE API
+// ============================================================
+
+async function getProfileContent(profileDocId, data) {
+  const uid =
+    data.uid || profileDocId;
+
+  const userId =
+    data.user_id;
+
+  const levelMap = new Map();
+
+  const levelQueries = [
+    ["creator_uid", uid],
+    ["uid", uid]
+  ];
+
+  if (
+    userId !== undefined &&
+    userId !== null
+  ) {
+    levelQueries.push(
+      ["creator_user_id", userId]
+    );
+    levelQueries.push(
+      ["user_id", userId]
+    );
+  }
+
+  for (
+    const [field, value]
+    of levelQueries
+  ) {
+    const snapshot =
+      await firebaseRetry(
+        `PROFILE LEVELS ${field}`,
+        () => db
+          .collection("levels")
+          .where(field, "==", value)
+          .limit(100)
+          .get()
+      );
+
+    snapshot.docs.forEach(doc => {
+      levelMap.set(
+        doc.id,
+        publicLevel(
+          doc.data(),
+          doc.id
+        )
+      );
+    });
+  }
+
+  const names = [
+    data.username,
+    data.display_name
+  ].filter(Boolean);
+
+  for (const username of names) {
+    const snapshot =
+      await firebaseRetry(
+        "PROFILE LEVELS BY CREATOR",
+        () => db
+          .collection("levels")
+          .where("creator", "==", username)
+          .limit(100)
+          .get()
+      );
+
+    snapshot.docs.forEach(doc => {
+      levelMap.set(
+        doc.id,
+        publicLevel(
+          doc.data(),
+          doc.id
+        )
+      );
+    });
+  }
+
+  const postMap = new Map();
+
+  const postQueries = [
+    ["uid", uid]
+  ];
+
+  if (
+    userId !== undefined &&
+    userId !== null
+  ) {
+    postQueries.push(
+      ["user_id", userId]
+    );
+  }
+
+  for (
+    const [field, value]
+    of postQueries
+  ) {
+    const snapshot =
+      await firebaseRetry(
+        `PROFILE POSTS ${field}`,
+        () => db
+          .collection("posts")
+          .where(field, "==", value)
+          .limit(100)
+          .get()
+      );
+
+    snapshot.docs.forEach(doc => {
+      postMap.set(
+        doc.id,
+        publicPost(
+          doc.data(),
+          doc.id
+        )
+      );
+    });
+  }
+
+  for (const username of names) {
+    for (
+      const field of [
+        "author",
+        "username"
+      ]
+    ) {
+      const snapshot =
+        await firebaseRetry(
+          `PROFILE POSTS ${field}`,
+          () => db
+            .collection("posts")
+            .where(field, "==", username)
+            .limit(100)
+            .get()
+        );
+
+      snapshot.docs.forEach(doc => {
+        postMap.set(
+          doc.id,
+          publicPost(
+            doc.data(),
+            doc.id
+          )
+        );
+      });
+    }
+  }
+
+  const followers =
+    await firebaseRetry(
+      "PROFILE FOLLOWERS",
+      () => db
+        .collection("follows")
+        .where(
+          "following_uid",
+          "==",
+          profileDocId
+        )
+        .limit(500)
         .get()
     );
 
-    res.json(
-      snapshot.docs.map(doc => publicProfile(
-        doc.data(),
-        doc.data().user_id || doc.id
-      ))
+  const following =
+    await firebaseRetry(
+      "PROFILE FOLLOWING",
+      () => db
+        .collection("follows")
+        .where(
+          "follower_uid",
+          "==",
+          profileDocId
+        )
+        .limit(500)
+        .get()
     );
-  } catch (error) {
-    console.error("Players error:", error);
 
-    res.status(503).json({
-      error: "Failed to read players after retries"
-    });
-  }
-});
+  const friends =
+    await firebaseRetry(
+      "PROFILE FRIENDS",
+      () => db
+        .collection("friends")
+        .where(
+          "users",
+          "array-contains",
+          profileDocId
+        )
+        .limit(500)
+        .get()
+    );
 
-// ==================================================
-// PROFILE
-// GET /api/profiles/:id
-// GET /api/profile/:id
-// ==================================================
+  const profile =
+    publicProfile(
+      data,
+      data.user_id || profileDocId
+    );
+
+  profile.followers =
+    followers.size;
+
+  profile.following =
+    following.size;
+
+  profile.friends =
+    friends.size;
+
+  return {
+    profile,
+    levels:
+      Array.from(levelMap.values()),
+    posts:
+      Array.from(postMap.values())
+  };
+}
 
 async function profileResponse(req, res) {
   try {
-    const found = await findProfile(req.params.id);
+    const found =
+      await findProfile(
+        req.params.id
+      );
 
     if (!found) {
       return res.status(404).json({
@@ -845,183 +1542,204 @@ async function profileResponse(req, res) {
       });
     }
 
-    const profile = publicProfile(
-      found.data,
-      found.data.user_id || req.params.id
-    );
-
-    // Read the user's levels.
-    const levels = await findLevelsForProfile(found.id, found.data);
-
-    // Read the user's posts.
-    const posts = await findPostsForProfile(found.id, found.data);
-
-    // Read social counts from actual relationship collections.
-    const followersSnapshot = await firebaseRetry(
-      "READ PROFILE FOLLOWERS",
-      () => db.collection("follows")
-        .where("following_uid", "==", found.id)
-        .get()
-    );
-
-    const followingSnapshot = await firebaseRetry(
-      "READ PROFILE FOLLOWING",
-      () => db.collection("follows")
-        .where("follower_uid", "==", found.id)
-        .get()
-    );
-
-    const friendsSnapshot = await firebaseRetry(
-      "READ PROFILE FRIENDS",
-      () => db.collection("friends")
-        .where("users", "array-contains", found.id)
-        .get()
-    );
-
-    profile.followers = followersSnapshot.size;
-    profile.following = followingSnapshot.size;
-    profile.friends = friendsSnapshot.size;
+    const content =
+      await getProfileContent(
+        found.id,
+        found.data
+      );
 
     res.json({
       found: true,
-      profile,
-      levels,
-      posts
+      ...content
     });
   } catch (error) {
-    console.error("Profile read error:", error);
+    console.error(
+      "[Profile] Load error:",
+      error.message
+    );
 
     res.status(503).json({
       found: false,
-      error: "Profile could not be loaded after retries"
+      error:
+        "Profile temporarily unavailable"
     });
   }
 }
 
-app.get("/api/profiles/:id", profileResponse);
-app.get("/api/profile/:id", profileResponse);
+app.get(
+  "/api/profiles/:id",
+  requireFirebase,
+  profileResponse
+);
 
-// ==================================================
+app.get(
+  "/api/profile/:id",
+  requireFirebase,
+  profileResponse
+);
+
+// ============================================================
 // PROFILE EDIT
-// ==================================================
+// ============================================================
 
-app.post("/api/profile/update", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
+app.post(
+  "/api/profile/update",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
 
-    const profile = await findProfile(user.uid);
+      if (!user) return;
 
-    if (!profile) {
-      return res.status(404).json({
-        success: false,
-        error: "Profile not found"
-      });
-    }
+      const profile =
+        await findProfile(user.uid);
 
-    const updates = {};
-
-    if (req.body?.display_name !== undefined) {
-      const name = clean(req.body.display_name);
-
-      if (name.length > 40) {
-        return res.status(400).json({
+      if (!profile) {
+        return res.status(404).json({
           success: false,
-          error: "Name is too long"
+          error: "Profile not found"
         });
       }
 
-      updates.display_name = name || profile.data.username;
-    }
+      const updates = {};
 
-    if (req.body?.bio !== undefined) {
-      updates.bio = clean(req.body.bio).slice(0, 500);
-    }
+      if (
+        req.body?.display_name !==
+        undefined
+      ) {
+        updates.display_name =
+          clean(
+            req.body.display_name,
+            profile.data.username
+          ).slice(0, 40);
+      }
 
-    if (req.body?.avatar_url !== undefined) {
-      updates.avatar_url = clean(req.body.avatar_url).slice(0, 2000);
-    }
+      if (
+        req.body?.bio !==
+        undefined
+      ) {
+        updates.bio =
+          clean(
+            req.body.bio
+          ).slice(0, 500);
+      }
 
-    updates.updated_at = FieldValue.serverTimestamp();
+      if (
+        req.body?.avatar_url !==
+        undefined
+      ) {
+        updates.avatar_url =
+          clean(
+            req.body.avatar_url
+          ).slice(0, 2000);
+      }
 
-    const saved = await writeDocAndVerify(
-      "profiles",
-      profile.id,
-      updates,
-      { merge: true }
-    );
+      updates.updated_at =
+        FieldValue.serverTimestamp();
 
-    res.json({
-      success: true,
-      profile: publicProfile(
-        saved.data,
-        saved.data.user_id || profile.id
-      )
-    });
-  } catch (error) {
-    console.error("Profile update error:", error);
+      const saved =
+        await writeDocAndVerify(
+          "profiles",
+          profile.id,
+          updates,
+          { merge: true }
+        );
 
-    res.status(500).json({
-      success: false,
-      error: "Profile update failed after retries"
-    });
-  }
-});
-
-// ==================================================
-// PASSWORD CHANGE
-// ==================================================
-
-app.post("/api/profile/password", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const password = String(req.body?.password || "");
-
-    if (password.length < 6) {
-      return res.status(400).json({
+      res.json({
+        success: true,
+        profile:
+          publicProfile(
+            saved.data,
+            saved.data.user_id ||
+            profile.id
+          )
+      });
+    } catch (error) {
+      res.status(500).json({
         success: false,
-        error: "Password must be at least 6 characters"
+        error:
+          "Profile update failed"
       });
     }
-
-    await firebaseRetry(
-      "UPDATE PASSWORD",
-      () => auth.updateUser(user.uid, { password })
-    );
-
-    // Verify Auth account still exists.
-    await firebaseRetry(
-      "VERIFY PASSWORD ACCOUNT",
-      () => auth.getUser(user.uid)
-    );
-
-    res.json({
-      success: true,
-      password_updated: true
-    });
-  } catch (error) {
-    console.error("Password update error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Password update failed after retries"
-    });
   }
-});
+);
 
-// ==================================================
+// ============================================================
+// PASSWORD UPDATE
+// ============================================================
+
+app.post(
+  "/api/profile/password",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
+
+      if (!user) return;
+
+      const password =
+        String(
+          req.body?.password || ""
+        );
+
+      if (password.length < 6) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Password must be at least 6 characters"
+        });
+      }
+
+      await firebaseRetry(
+        "UPDATE PASSWORD",
+        () => auth.updateUser(
+          user.uid,
+          { password }
+        )
+      );
+
+      // Verify the Auth account still exists.
+      await firebaseRetry(
+        "VERIFY AUTH ACCOUNT",
+        () => auth.getUser(
+          user.uid
+        )
+      );
+
+      res.json({
+        success: true,
+        password_updated: true
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          "Password update failed"
+      });
+    }
+  }
+);
+
+// ============================================================
 // LEVEL LOOKUP
-// ==================================================
+// ============================================================
 
 async function findLevel(identifier) {
-  const value = clean(identifier);
+  const value =
+    clean(identifier);
 
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
   // Direct Firestore document ID.
-  const direct = await readDoc("levels", value);
+  const direct =
+    await readDoc(
+      "levels",
+      value
+    );
 
   if (direct.exists) {
     return {
@@ -1030,17 +1748,27 @@ async function findLevel(identifier) {
     };
   }
 
-  // Try common ID fields.
-  const fields = ["level_id", "id", "levelId"];
-
-  for (const field of fields) {
-    const result = await firebaseRetry(
-      `FIND LEVEL ${field} ${value}`,
-      () => db.collection("levels")
-        .where(field, "==", value)
-        .limit(1)
-        .get()
-    );
+  // Common ID fields.
+  for (
+    const field of [
+      "level_id",
+      "id",
+      "levelId"
+    ]
+  ) {
+    const result =
+      await firebaseRetry(
+        `FIND LEVEL ${field}`,
+        () => db
+          .collection("levels")
+          .where(
+            field,
+            "==",
+            value
+          )
+          .limit(1)
+          .get()
+      );
 
     if (!result.empty) {
       return {
@@ -1050,373 +1778,242 @@ async function findLevel(identifier) {
     }
 
     if (/^\d+$/.test(value)) {
-      const numeric = await firebaseRetry(
-        `FIND LEVEL ${field} NUMBER ${value}`,
-        () => db.collection("levels")
-          .where(field, "==", Number(value))
-          .limit(1)
-          .get()
-      );
+      const numeric =
+        await firebaseRetry(
+          `FIND LEVEL ${field} NUMBER`,
+          () => db
+            .collection("levels")
+            .where(
+              field,
+              "==",
+              Number(value)
+            )
+            .limit(1)
+            .get()
+        );
 
       if (!numeric.empty) {
         return {
           id: numeric.docs[0].id,
-          data: numeric.docs[0].data()
+          data:
+            numeric.docs[0].data()
         };
       }
-    }
-  }
-
-  // Older levels: creation-order compatibility.
-  if (/^\d+$/.test(value)) {
-    const ordered = await firebaseRetry(
-      `FIND LEVEL BY CREATION ORDER ${value}`,
-      () => db.collection("levels")
-        .orderBy("created_at", "asc")
-        .get()
-    );
-
-    const index = Number(value) - 1;
-
-    if (index >= 0 && index < ordered.docs.length) {
-      return {
-        id: ordered.docs[index].id,
-        data: ordered.docs[index].data()
-      };
     }
   }
 
   return null;
 }
 
-// ==================================================
-// LEVEL LIST
-// ==================================================
+// ============================================================
+// LEVELS
+// ============================================================
 
-app.get("/api/levels", async (req, res) => {
-  try {
-    const snapshot = await firebaseRetry(
-      "READ LEVELS",
-      () => db.collection("levels")
-        .orderBy("created_at", "desc")
-        .limit(100)
-        .get()
-    );
+app.get(
+  "/api/levels",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await firebaseRetry(
+          "READ LEVELS",
+          () => db
+            .collection("levels")
+            .limit(100)
+            .get()
+        );
 
-    const levels = snapshot.docs.map(doc =>
-      publicLevel(doc.data(), doc.id)
-    );
+      const levels =
+        snapshot.docs.map(doc =>
+          publicLevel(
+            doc.data(),
+            doc.id
+          )
+        );
 
-    res.json(levels);
-  } catch (error) {
-    console.error("Levels list error:", error);
-
-    res.status(503).json({
-      error: "Failed to read levels after retries"
-    });
-  }
-});
-
-// ==================================================
-// EXACT LEVEL
-// ==================================================
-
-app.get("/api/levels/:id", async (req, res) => {
-  try {
-    const found = await findLevel(req.params.id);
-
-    if (!found) {
-      return res.status(404).json({
-        found: false,
-        error: "Level not found"
+      res.json({
+        levels
       });
-    }
-
-    res.json({
-      found: true,
-      level: publicLevel(found.data, found.id)
-    });
-  } catch (error) {
-    console.error("Level read error:", error);
-
-    res.status(503).json({
-      found: false,
-      error: "Level could not be loaded after retries"
-    });
-  }
-});
-
-// ==================================================
-// CREATE LEVEL
-// READ -> VALIDATE -> WRITE -> READ BACK
-// ==================================================
-
-app.post("/api/levels", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const name = clean(req.body?.name);
-
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        error: "Level name is required"
-      });
-    }
-
-    if (name.length > 100) {
-      return res.status(400).json({
-        success: false,
-        error: "Level name is too long"
-      });
-    }
-
-    const profile = await findProfile(user.uid);
-
-    const creatorUsername =
-      profile?.data?.username ||
-      profile?.data?.display_name ||
-      user.name ||
-      "Unknown Player";
-
-    const creatorUserId =
-      profile?.data?.user_id ||
-      profile?.id ||
-      user.uid;
-
-    // Use a Firestore-generated ID so every level has a unique stable URL.
-    const ref = db.collection("levels").doc();
-
-    const levelData = {
-      id: ref.id,
-      level_id: ref.id,
-      name,
-      description: clean(req.body?.description, "no level"),
-      thumbnail_url: clean(req.body?.thumbnail_url),
-      creator: creatorUsername,
-      creator_username: creatorUsername,
-      creator_user_id: creatorUserId,
-      creator_uid: user.uid,
-      uid: user.uid,
-      hearts: 0,
-      likes: 0,
-      followers: 0,
-      plays: 0,
-      created_at: FieldValue.serverTimestamp(),
-      updated_at: FieldValue.serverTimestamp()
-    };
-
-    const saved = await writeDocAndVerify(
-      "levels",
-      ref.id,
-      levelData
-    );
-
-    res.json({
-      success: true,
-      level: publicLevel(saved.data, saved.id)
-    });
-  } catch (error) {
-    console.error("Level create error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Level creation failed after retries"
-    });
-  }
-});
-
-// ==================================================
-// LEVEL ACTIONS
-// ==================================================
-
-async function relationshipAction(req, res, collection, type) {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const level = await findLevel(req.params.id);
-
-    if (!level) {
-      return res.status(404).json({
-        success: false,
-        error: "Level not found"
-      });
-    }
-
-    const levelId = level.id;
-    const relationshipId = `${user.uid}_${levelId}`;
-
-    const ref = db.collection(collection).doc(relationshipId);
-
-    const existing = await readDoc(collection, relationshipId);
-
-    if (!existing.exists) {
-      await writeDocAndVerify(
-        collection,
-        relationshipId,
-        {
-          uid: user.uid,
-          user_id: user.uid,
-          level_id: levelId,
-          created_at: FieldValue.serverTimestamp()
-        }
+    } catch (error) {
+      console.error(
+        "[Levels] List error:",
+        error.message
       );
+
+      // Empty collection / temporary failure
+      // is represented safely.
+      res.status(503).json({
+        levels: [],
+        firebase: false,
+        error:
+          "Levels temporarily unavailable"
+      });
     }
+  }
+);
 
-    const countField =
-      type === "heart"
-        ? "hearts"
-        : type === "like"
-          ? "likes"
-          : "followers";
+app.get(
+  "/api/levels/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const found =
+        await findLevel(
+          req.params.id
+        );
 
-    const updatedLevel = await firebaseRetry(
-      `UPDATE LEVEL ${countField}`,
-      async () => {
-        const levelRef = db.collection("levels").doc(levelId);
-
-        await db.runTransaction(async transaction => {
-          const snap = await transaction.get(levelRef);
-
-          if (!snap.exists) {
-            throw new Error("Level disappeared during update");
-          }
-
-          const current = Number(snap.data()[countField] || 0);
-
-          transaction.update(levelRef, {
-            [countField]: Math.max(0, current + (existing.exists ? 0 : 1)),
-            updated_at: FieldValue.serverTimestamp()
-          });
+      if (!found) {
+        return res.status(404).json({
+          found: false,
+          level: null,
+          error: "Level not found"
         });
-
-        return levelRef.get();
       }
-    );
 
-    res.json({
-      success: true,
-      level: publicLevel(updatedLevel.data(), updatedLevel.id)
-    });
-  } catch (error) {
-    console.error(`Level ${type} error:`, error);
+      res.json({
+        found: true,
+        level:
+          publicLevel(
+            found.data,
+            found.id
+          )
+      });
+    } catch (error) {
+      console.error(
+        "[Levels] Exact load error:",
+        error.message
+      );
 
-    res.status(500).json({
-      success: false,
-      error: `Level ${type} failed after retries`
-    });
+      res.status(503).json({
+        found: false,
+        level: null,
+        error:
+          "Level temporarily unavailable"
+      });
+    }
   }
-}
-
-app.post("/api/levels/:id/heart", (req, res) =>
-  relationshipAction(req, res, "level_hearts", "heart")
 );
 
-app.post("/api/levels/:id/like", (req, res) =>
-  relationshipAction(req, res, "level_likes", "like")
+app.post(
+  "/api/levels",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
+
+      if (!user) return;
+
+      const name =
+        clean(req.body?.name);
+
+      if (!name) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Level name is required"
+        });
+      }
+
+      if (name.length > 100) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Level name is too long"
+        });
+      }
+
+      const profile =
+        await findProfile(
+          user.uid
+        );
+
+      const creator =
+        profile?.data?.username ||
+        profile?.data?.display_name ||
+        user.name ||
+        "Unknown Creator";
+
+      const creatorUserId =
+        profile?.data?.user_id ??
+        user.uid;
+
+      // Generate the ID once and write exactly one document.
+      const ref =
+        db.collection("levels").doc();
+
+      const levelData = {
+        id: ref.id,
+        level_id: ref.id,
+        title: name,
+        name,
+        description:
+          clean(
+            req.body?.description,
+            "No description"
+          ),
+        thumbnail_url:
+          clean(
+            req.body?.thumbnail_url
+          ),
+        creator,
+        creator_username: creator,
+        creator_user_id:
+          creatorUserId,
+        creator_uid:
+          user.uid,
+        uid:
+          user.uid,
+        hearts: 0,
+        likes: 0,
+        followers: 0,
+        plays: 0,
+        created_at:
+          FieldValue.serverTimestamp(),
+        updated_at:
+          FieldValue.serverTimestamp()
+      };
+
+      const saved =
+        await writeDocAndVerify(
+          "levels",
+          ref.id,
+          levelData
+        );
+
+      res.json({
+        success: true,
+        level:
+          publicLevel(
+            saved.data(),
+            saved.id
+          )
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          "Level creation failed"
+      });
+    }
+  }
 );
 
-app.post("/api/levels/:id/follow", (req, res) =>
-  relationshipAction(req, res, "level_follows", "follow")
-);
-
-// ==================================================
-// PROFILE LEVELS
-// ==================================================
-
-async function findLevelsForProfile(profileDocId, profileData) {
-  const uid = profileData.uid || profileDocId;
-  const userId = profileData.user_id;
-
-  const seen = new Map();
-
-  const queries = [
-    ["creator_uid", uid],
-    ["uid", uid]
-  ];
-
-  if (userId !== undefined && userId !== null) {
-    queries.push(["creator_user_id", userId]);
-    queries.push(["user_id", userId]);
-  }
-
-  for (const [field, value] of queries) {
-    const snapshot = await firebaseRetry(
-      `READ PROFILE LEVELS ${field}`,
-      () => db.collection("levels")
-        .where(field, "==", value)
-        .limit(100)
-        .get()
-    );
-
-    snapshot.docs.forEach(doc => {
-      seen.set(doc.id, publicLevel(doc.data(), doc.id));
-    });
-  }
-
-  // Username compatibility for older levels.
-  const usernames = [
-    profileData.username,
-    profileData.display_name
-  ].filter(Boolean);
-
-  for (const username of usernames) {
-    const snapshot = await firebaseRetry(
-      "READ PROFILE LEVELS USERNAME",
-      () => db.collection("levels")
-        .where("creator", "==", username)
-        .limit(100)
-        .get()
-    );
-
-    snapshot.docs.forEach(doc => {
-      seen.set(doc.id, publicLevel(doc.data(), doc.id));
-    });
-  }
-
-  return Array.from(seen.values());
-}
-
-// ==================================================
+// ============================================================
 // POSTS
-// ==================================================
-
-app.get("/api/posts", async (req, res) => {
-  try {
-    const snapshot = await firebaseRetry(
-      "READ POSTS",
-      () => db.collection("posts")
-        .orderBy("created_at", "desc")
-        .limit(100)
-        .get()
-    );
-
-    res.json(
-      snapshot.docs.map(doc =>
-        publicPost(doc.data(), doc.id)
-      )
-    );
-  } catch (error) {
-    console.error("Posts list error:", error);
-
-    res.status(503).json({
-      error: "Failed to read posts after retries"
-    });
-  }
-});
-
-// ==================================================
-// EXACT POST
-// ==================================================
+// ============================================================
 
 async function findPost(identifier) {
-  const value = clean(identifier);
+  const value =
+    clean(identifier);
 
   if (!value) return null;
 
-  const direct = await readDoc("posts", value);
+  const direct =
+    await readDoc(
+      "posts",
+      value
+    );
 
   if (direct.exists) {
     return {
@@ -1425,37 +2022,32 @@ async function findPost(identifier) {
     };
   }
 
-  for (const field of ["post_id", "id"]) {
-    const result = await firebaseRetry(
-      `FIND POST ${field}`,
-      () => db.collection("posts")
-        .where(field, "==", value)
-        .limit(1)
-        .get()
-    );
+  for (
+    const field of [
+      "post_id",
+      "id"
+    ]
+  ) {
+    const result =
+      await firebaseRetry(
+        `FIND POST ${field}`,
+        () => db
+          .collection("posts")
+          .where(
+            field,
+            "==",
+            value
+          )
+          .limit(1)
+          .get()
+      );
 
     if (!result.empty) {
       return {
-        id: result.docs[0].id,
-        data: result.docs[0].data()
-      };
-    }
-  }
-
-  if (/^\d+$/.test(value)) {
-    const ordered = await firebaseRetry(
-      `FIND POST BY CREATION ORDER ${value}`,
-      () => db.collection("posts")
-        .orderBy("created_at", "asc")
-        .get()
-    );
-
-    const index = Number(value) - 1;
-
-    if (index >= 0 && index < ordered.docs.length) {
-      return {
-        id: ordered.docs[index].id,
-        data: ordered.docs[index].data()
+        id:
+          result.docs[0].id,
+        data:
+          result.docs[0].data()
       };
     }
   }
@@ -1464,568 +2056,677 @@ async function findPost(identifier) {
 }
 
 async function readReplies(postId) {
-  const queries = [
-    db.collection("post_replies")
-      .where("post_id", "==", String(postId))
-      .limit(200)
-      .get()
-  ];
-
-  // Some older data may have stored the post ID as another type.
-  if (/^\d+$/.test(String(postId))) {
-    queries.push(
-      db.collection("post_replies")
-        .where("post_id", "==", Number(postId))
+  const snapshot =
+    await firebaseRetry(
+      "READ POST REPLIES",
+      () => db
+        .collection("post_replies")
+        .where(
+          "post_id",
+          "==",
+          String(postId)
+        )
         .limit(200)
         .get()
     );
-  }
 
-  const snapshots = [];
+  return snapshot.docs.map(doc => {
+    const data = doc.data();
 
-  for (const query of queries) {
-    snapshots.push(
-      await firebaseRetry("READ POST REPLIES", () => query)
-    );
-  }
-
-  const map = new Map();
-
-  for (const snapshot of snapshots) {
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-
-      map.set(doc.id, {
-        id: doc.id,
-        user_id: data.user_id || data.uid || "?",
-        uid: data.uid || "",
-        username: data.username || "No username found",
-        avatar_url: data.avatar_url || "",
-        text: data.text || data.content || "no reply",
-        created_at: data.created_at || null
-      });
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    const aa = a.created_at?._seconds || 0;
-    const bb = b.created_at?._seconds || 0;
-    return aa - bb;
+    return {
+      id: doc.id,
+      user_id:
+        data.user_id ||
+        data.uid ||
+        null,
+      uid:
+        data.uid || "",
+      username:
+        clean(
+          data.username
+        ) || "Unknown User",
+      avatar_url:
+        clean(
+          data.avatar_url
+        ),
+      text:
+        clean(
+          data.text ||
+          data.content,
+          "No reply"
+        ),
+      created_at:
+        data.created_at || null
+    };
   });
 }
 
-async function postResponse(req, res) {
-  try {
-    const found = await findPost(req.params.id);
+app.get(
+  "/api/posts",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await firebaseRetry(
+          "READ POSTS",
+          () => db
+            .collection("posts")
+            .limit(100)
+            .get()
+        );
 
-    if (!found) {
-      return res.status(404).json({
+      const posts =
+        snapshot.docs.map(doc =>
+          publicPost(
+            doc.data(),
+            doc.id
+          )
+        );
+
+      res.json(posts);
+    } catch (error) {
+      res.status(503).json({
+        error:
+          "Posts temporarily unavailable"
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/posts/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const found =
+        await findPost(
+          req.params.id
+        );
+
+      if (!found) {
+        return res.status(404).json({
+          found: false,
+          post: null,
+          replies: [],
+          error:
+            "Post not found"
+        });
+      }
+
+      const replies =
+        await readReplies(
+          found.id
+        );
+
+      res.json({
+        found: true,
+        post:
+          publicPost(
+            found.data,
+            found.id
+          ),
+        replies
+      });
+    } catch (error) {
+      res.status(503).json({
         found: false,
-        error: "Post not found",
         post: null,
-        replies: []
+        replies: [],
+        error:
+          "Post temporarily unavailable"
       });
     }
-
-    const post = publicPost(found.data, found.id);
-    const replies = await readReplies(found.id);
-
-    res.json({
-      found: true,
-      post,
-      replies
-    });
-  } catch (error) {
-    console.error("Post read error:", error);
-
-    res.status(503).json({
-      found: false,
-      error: "Post could not be loaded after retries",
-      post: null,
-      replies: []
-    });
   }
-}
+);
 
-app.get("/api/posts/:id", postResponse);
+app.post(
+  "/api/posts",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
 
-// ==================================================
-// CREATE POST
-// ==================================================
+      if (!user) return;
 
-app.post("/api/posts", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
+      const text =
+        clean(
+          req.body?.text ||
+          req.body?.content
+        );
 
-    const text = clean(req.body?.text || req.body?.content);
+      if (!text) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Post text is required"
+        });
+      }
 
-    if (!text) {
-      return res.status(400).json({
-        success: false,
-        error: "Post text is required"
-      });
-    }
+      if (text.length > 5000) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Post is too long"
+        });
+      }
 
-    if (text.length > 5000) {
-      return res.status(400).json({
-        success: false,
-        error: "Post is too long"
-      });
-    }
+      const profile =
+        await findProfile(
+          user.uid
+        );
 
-    const profile = await findProfile(user.uid);
-
-    const author =
-      profile?.data?.username ||
-      profile?.data?.display_name ||
-      user.name ||
-      "No username found";
-
-    const userId =
-      profile?.data?.user_id ||
-      profile?.id ||
-      user.uid;
-
-    const ref = db.collection("posts").doc();
-
-    const postData = {
-      id: ref.id,
-      post_id: ref.id,
-      uid: user.uid,
-      user_id: userId,
-      author,
-      username: author,
-      avatar_url: profile?.data?.avatar_url || "",
-      text,
-      content: text,
-      created_at: FieldValue.serverTimestamp(),
-      updated_at: FieldValue.serverTimestamp()
-    };
-
-    const saved = await writeDocAndVerify(
-      "posts",
-      ref.id,
-      postData
-    );
-
-    res.json({
-      success: true,
-      post: publicPost(saved.data, saved.id)
-    });
-  } catch (error) {
-    console.error("Post create error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Post creation failed after retries"
-    });
-  }
-});
-
-// ==================================================
-// REPLY TO POST
-// READ POST -> WRITE REPLY -> READ REPLIES
-// ==================================================
-
-app.post("/api/posts/:id/replies", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const post = await findPost(req.params.id);
-
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        error: "Post not found"
-      });
-    }
-
-    const text = clean(req.body?.text || req.body?.content);
-
-    if (!text) {
-      return res.status(400).json({
-        success: false,
-        error: "Reply text is required"
-      });
-    }
-
-    if (text.length > 2000) {
-      return res.status(400).json({
-        success: false,
-        error: "Reply is too long"
-      });
-    }
-
-    const profile = await findProfile(user.uid);
-
-    const replyRef = db.collection("post_replies").doc();
-
-    const replyData = {
-      id: replyRef.id,
-      post_id: post.id,
-      post_uid: post.data.uid || "",
-      uid: user.uid,
-      user_id:
-        profile?.data?.user_id ||
-        profile?.id ||
-        user.uid,
-      username:
+      const author =
         profile?.data?.username ||
         profile?.data?.display_name ||
         user.name ||
-        "No username found",
-      avatar_url: profile?.data?.avatar_url || "",
-      text,
-      content: text,
-      created_at: FieldValue.serverTimestamp()
-    };
+        "Unknown User";
 
-    await writeDocAndVerify(
-      "post_replies",
-      replyRef.id,
-      replyData
-    );
+      const userId =
+        profile?.data?.user_id ??
+        user.uid;
 
-    // READ BACK ALL replies so the page gets the actual Firebase state.
-    const replies = await readReplies(post.id);
+      const ref =
+        db.collection("posts").doc();
 
-    res.json({
-      success: true,
-      post_id: post.id,
-      replies
-    });
-  } catch (error) {
-    console.error("Reply error:", error);
+      const postData = {
+        id: ref.id,
+        post_id: ref.id,
+        uid: user.uid,
+        user_id: userId,
+        author,
+        username: author,
+        avatar_url:
+          profile?.data?.avatar_url ||
+          "",
+        text,
+        content: text,
+        created_at:
+          FieldValue.serverTimestamp(),
+        updated_at:
+          FieldValue.serverTimestamp()
+      };
 
-    res.status(500).json({
-      success: false,
-      error: "Reply failed after retries"
-    });
-  }
-});
+      const saved =
+        await writeDocAndVerify(
+          "posts",
+          ref.id,
+          postData
+        );
 
-// ==================================================
-// PROFILE POSTS
-// ==================================================
-
-async function findPostsForProfile(profileDocId, profileData) {
-  const uid = profileData.uid || profileDocId;
-  const userId = profileData.user_id;
-
-  const seen = new Map();
-
-  const queries = [
-    ["uid", uid],
-    ["user_id", userId]
-  ].filter(([, value]) => value !== undefined && value !== null);
-
-  for (const [field, value] of queries) {
-    const snapshot = await firebaseRetry(
-      `READ PROFILE POSTS ${field}`,
-      () => db.collection("posts")
-        .where(field, "==", value)
-        .limit(100)
-        .get()
-    );
-
-    snapshot.docs.forEach(doc => {
-      seen.set(doc.id, publicPost(doc.data(), doc.id));
-    });
-  }
-
-  // Older posts may only have an author/username.
-  for (const username of [
-    profileData.username,
-    profileData.display_name
-  ].filter(Boolean)) {
-    for (const field of ["author", "username"]) {
-      const snapshot = await firebaseRetry(
-        `READ PROFILE POSTS ${field}`,
-        () => db.collection("posts")
-          .where(field, "==", username)
-          .limit(100)
-          .get()
-      );
-
-      snapshot.docs.forEach(doc => {
-        seen.set(doc.id, publicPost(doc.data(), doc.id));
-      });
-    }
-  }
-
-  return Array.from(seen.values()).sort((a, b) => {
-    const aa = a.created_at?._seconds || 0;
-    const bb = b.created_at?._seconds || 0;
-    return bb - aa;
-  });
-}
-
-// ==================================================
-// FOLLOW / FRIEND SYSTEM
-// ==================================================
-
-app.post("/api/profiles/:id/follow", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const target = await findProfile(req.params.id);
-
-    if (!target) {
-      return res.status(404).json({
-        success: false,
-        error: "Profile not found"
-      });
-    }
-
-    if (target.id === user.uid) {
-      return res.status(400).json({
-        success: false,
-        error: "You cannot follow yourself"
-      });
-    }
-
-    const relationshipId = `${user.uid}_${target.id}`;
-    const ref = db.collection("follows").doc(relationshipId);
-
-    const existing = await readDoc("follows", relationshipId);
-
-    if (existing.exists) {
-      await deleteDocAndVerify("follows", relationshipId);
-
-      return res.json({
+      res.json({
         success: true,
-        following: false
+        post:
+          publicPost(
+            saved.data(),
+            saved.id
+          )
       });
-    }
-
-    await writeDocAndVerify(
-      "follows",
-      relationshipId,
-      {
-        follower_uid: user.uid,
-        following_uid: target.id,
-        created_at: FieldValue.serverTimestamp()
-      }
-    );
-
-    res.json({
-      success: true,
-      following: true
-    });
-  } catch (error) {
-    console.error("Follow error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Follow failed after retries"
-    });
-  }
-});
-
-app.post("/api/profiles/:id/friend", async (req, res) => {
-  try {
-    const user = await requireUser(req, res);
-    if (!user) return;
-
-    const target = await findProfile(req.params.id);
-
-    if (!target) {
-      return res.status(404).json({
+    } catch (error) {
+      res.status(500).json({
         success: false,
-        error: "Profile not found"
+        error:
+          "Post creation failed"
       });
     }
-
-    if (target.id === user.uid) {
-      return res.status(400).json({
-        success: false,
-        error: "You cannot friend yourself"
-      });
-    }
-
-    const users = [user.uid, target.id].sort();
-    const relationshipId = `${users[0]}_${users[1]}`;
-
-    const existing = await readDoc("friends", relationshipId);
-
-    if (existing.exists) {
-      await deleteDocAndVerify("friends", relationshipId);
-
-      return res.json({
-        success: true,
-        friends: false
-      });
-    }
-
-    await writeDocAndVerify(
-      "friends",
-      relationshipId,
-      {
-        users,
-        created_at: FieldValue.serverTimestamp()
-      }
-    );
-
-    res.json({
-      success: true,
-      friends: true
-    });
-  } catch (error) {
-    console.error("Friend error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Friend action failed after retries"
-    });
   }
-});
-
-// ==================================================
-// GENERIC FIRESTORE DATA API
-// ==================================================
-
-app.get("/api/data/:collection/:id", async (req, res) => {
-  try {
-    const snapshot = await readDoc(
-      req.params.collection,
-      req.params.id
-    );
-
-    if (!snapshot.exists) {
-      return res.status(404).json({
-        found: false
-      });
-    }
-
-    res.json({
-      found: true,
-      id: snapshot.id,
-      data: snapshot.data()
-    });
-  } catch (error) {
-    console.error("Generic read error:", error);
-
-    res.status(503).json({
-      found: false,
-      error: "Firebase read failed after retries"
-    });
-  }
-});
-
-app.post("/api/data/:collection/:id", async (req, res) => {
-  try {
-    if (!req.body || typeof req.body !== "object") {
-      return res.status(400).json({
-        error: "JSON body required"
-      });
-    }
-
-    const saved = await writeDocAndVerify(
-      req.params.collection,
-      req.params.id,
-      {
-        ...req.body,
-        updatedAt: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-
-    res.json({
-      success: true,
-      collection: req.params.collection,
-      id: saved.id,
-      verified: true,
-      data: saved.data()
-    });
-  } catch (error) {
-    console.error("Generic write error:", error);
-
-    res.status(503).json({
-      success: false,
-      error: "Firebase write failed after retries"
-    });
-  }
-});
-
-app.delete("/api/data/:collection/:id", async (req, res) => {
-  try {
-    await deleteDocAndVerify(
-      req.params.collection,
-      req.params.id
-    );
-
-    res.json({
-      success: true,
-      deleted: true,
-      verified: true,
-      collection: req.params.collection,
-      id: req.params.id
-    });
-  } catch (error) {
-    console.error("Generic delete error:", error);
-
-    res.status(503).json({
-      success: false,
-      error: "Firebase delete failed after retries"
-    });
-  }
-});
-
-// ==================================================
-// PAGE ALIASES
-// Render/Linux is case-sensitive, so support both.
-//
-// /Level.html and /level.html
-// /Profile.html and /profile.html
-// /Post.html and /post.html
-// ==================================================
-
-app.get(["/Level.html", "/level.html"], (req, res) => {
-  res.sendFile(path.join(__dirname, "Level.html"), error => {
-    if (error) {
-      res.sendFile(path.join(__dirname, "level.html"));
-    }
-  });
-});
-
-app.get(["/Profile.html", "/profile.html"], (req, res) => {
-  res.sendFile(path.join(__dirname, "Profile.html"), error => {
-    if (error) {
-      res.sendFile(path.join(__dirname, "profile.html"));
-    }
-  });
-});
-
-app.get(["/Post.html", "/post.html"], (req, res) => {
-  res.sendFile(path.join(__dirname, "Post.html"), error => {
-    if (error) {
-      res.sendFile(path.join(__dirname, "post.html"));
-    }
-  });
-});
-
-// ==================================================
-// STATIC WEBSITE
-// ==================================================
-
-app.use(
-  express.static(__dirname, {
-    extensions: ["html"],
-    maxAge: 0
-  })
 );
 
-// Homepage.
+// ============================================================
+// REPLIES
+// ============================================================
+
+app.post(
+  "/api/posts/:id/replies",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
+
+      if (!user) return;
+
+      const post =
+        await findPost(
+          req.params.id
+        );
+
+      if (!post) {
+        return res.status(404).json({
+          success: false,
+          error:
+            "Post not found"
+        });
+      }
+
+      const text =
+        clean(
+          req.body?.text ||
+          req.body?.content
+        );
+
+      if (!text) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Reply text is required"
+        });
+      }
+
+      if (text.length > 2000) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Reply is too long"
+        });
+      }
+
+      const profile =
+        await findProfile(
+          user.uid
+        );
+
+      const ref =
+        db.collection(
+          "post_replies"
+        ).doc();
+
+      const replyData = {
+        id: ref.id,
+        post_id: post.id,
+        uid: user.uid,
+        user_id:
+          profile?.data?.user_id ??
+          user.uid,
+        username:
+          profile?.data?.username ||
+          profile?.data?.display_name ||
+          user.name ||
+          "Unknown User",
+        avatar_url:
+          profile?.data?.avatar_url ||
+          "",
+        text,
+        content: text,
+        created_at:
+          FieldValue.serverTimestamp()
+      };
+
+      await writeDocAndVerify(
+        "post_replies",
+        ref.id,
+        replyData
+      );
+
+      // Read back from Firebase.
+      const replies =
+        await readReplies(
+          post.id
+        );
+
+      res.json({
+        success: true,
+        post_id: post.id,
+        replies
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          "Reply failed after retries"
+      });
+    }
+  }
+);
+
+// ============================================================
+// FOLLOW
+// ============================================================
+
+app.post(
+  "/api/profiles/:id/follow",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
+
+      if (!user) return;
+
+      const target =
+        await findProfile(
+          req.params.id
+        );
+
+      if (!target) {
+        return res.status(404).json({
+          success: false,
+          error:
+            "Profile not found"
+        });
+      }
+
+      if (target.id === user.uid) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "You cannot follow yourself"
+        });
+      }
+
+      const relationshipId =
+        `${user.uid}_${target.id}`;
+
+      const existing =
+        await readDoc(
+          "follows",
+          relationshipId
+        );
+
+      if (existing.exists) {
+        await deleteDocAndVerify(
+          "follows",
+          relationshipId
+        );
+
+        return res.json({
+          success: true,
+          following: false
+        });
+      }
+
+      await writeDocAndVerify(
+        "follows",
+        relationshipId,
+        {
+          follower_uid:
+            user.uid,
+          following_uid:
+            target.id,
+          created_at:
+            FieldValue.serverTimestamp()
+        }
+      );
+
+      res.json({
+        success: true,
+        following: true
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          "Follow failed after retries"
+      });
+    }
+  }
+);
+
+// ============================================================
+// FRIEND
+// ============================================================
+
+app.post(
+  "/api/profiles/:id/friend",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const user =
+        await requireUser(req, res);
+
+      if (!user) return;
+
+      const target =
+        await findProfile(
+          req.params.id
+        );
+
+      if (!target) {
+        return res.status(404).json({
+          success: false,
+          error:
+            "Profile not found"
+        });
+      }
+
+      if (target.id === user.uid) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "You cannot friend yourself"
+        });
+      }
+
+      const users =
+        [
+          user.uid,
+          target.id
+        ].sort();
+
+      const relationshipId =
+        `${users[0]}_${users[1]}`;
+
+      const existing =
+        await readDoc(
+          "friends",
+          relationshipId
+        );
+
+      if (existing.exists) {
+        await deleteDocAndVerify(
+          "friends",
+          relationshipId
+        );
+
+        return res.json({
+          success: true,
+          friends: false
+        });
+      }
+
+      await writeDocAndVerify(
+        "friends",
+        relationshipId,
+        {
+          users,
+          created_at:
+            FieldValue.serverTimestamp()
+        }
+      );
+
+      res.json({
+        success: true,
+        friends: true
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error:
+          "Friend action failed after retries"
+      });
+    }
+  }
+);
+
+// ============================================================
+// GENERIC DATA API
+// ============================================================
+
+app.get(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await readDoc(
+          req.params.collection,
+          req.params.id
+        );
+
+      if (!snapshot.exists) {
+        return res.status(404).json({
+          found: false
+        });
+      }
+
+      res.json({
+        found: true,
+        id: snapshot.id,
+        data: snapshot.data()
+      });
+    } catch (error) {
+      res.status(503).json({
+        found: false,
+        error:
+          "Firebase read failed"
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      if (
+        !req.body ||
+        typeof req.body !== "object"
+      ) {
+        return res.status(400).json({
+          error:
+            "JSON body required"
+        });
+      }
+
+      const saved =
+        await writeDocAndVerify(
+          req.params.collection,
+          req.params.id,
+          {
+            ...req.body,
+            updated_at:
+              FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        );
+
+      res.json({
+        success: true,
+        verified: true,
+        collection:
+          req.params.collection,
+        id: saved.id,
+        data: saved.data()
+      });
+    } catch (error) {
+      res.status(503).json({
+        success: false,
+        error:
+          "Firebase write failed"
+      });
+    }
+  }
+);
+
+app.delete(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      await deleteDocAndVerify(
+        req.params.collection,
+        req.params.id
+      );
+
+      res.json({
+        success: true,
+        deleted: true,
+        verified: true
+      });
+    } catch (error) {
+      res.status(503).json({
+        success: false,
+        error:
+          "Firebase delete failed"
+      });
+    }
+  }
+);
+
+// ============================================================
+// PAGE ALIASES
+// ============================================================
+
+function sendPage(res, primary, fallback) {
+  res.sendFile(
+    path.join(__dirname, primary),
+    error => {
+      if (!error) return;
+
+      res.sendFile(
+        path.join(__dirname, fallback)
+      );
+    }
+  );
+}
+
+app.get(
+  ["/Level.html", "/level.html"],
+  (req, res) =>
+    sendPage(
+      res,
+      "Level.html",
+      "level.html"
+    )
+);
+
+app.get(
+  ["/Profile.html", "/profile.html"],
+  (req, res) =>
+    sendPage(
+      res,
+      "Profile.html",
+      "profile.html"
+    )
+);
+
+app.get(
+  ["/Post.html", "/post.html"],
+  (req, res) =>
+    sendPage(
+      res,
+      "Post.html",
+      "post.html"
+    )
+);
+
+// ============================================================
+// STATIC WEBSITE
+// ============================================================
+
+app.use(
+  express.static(
+    __dirname,
+    {
+      extensions: ["html"],
+      maxAge: 0
+    }
+  )
+);
+
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  res.sendFile(
+    path.join(
+      __dirname,
+      "index.html"
+    )
+  );
 });
 
-// ==================================================
+// ============================================================
 // 404
-// ==================================================
+// ============================================================
 
 app.use((req, res) => {
   res.status(404).json({
@@ -2033,17 +2734,100 @@ app.use((req, res) => {
   });
 });
 
-// ==================================================
-// SERVER START
-// ==================================================
+// ============================================================
+// PROCESS ERROR HANDLERS
+// ============================================================
+//
+// These stop unexpected promise errors from killing the Render
+// process. Individual requests already have their own handlers.
+// ============================================================
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("==============================================");
-  console.log(`${SERVICE_NAME} server started`);
-  console.log(`Port: ${PORT}`);
-  console.log("Firebase Admin: connected");
-  console.log(`Firebase retries: ${RETRIES}`);
-  console.log("Write verification: enabled");
-  console.log("Read-after-write verification: enabled");
-  console.log("==============================================");
+process.on(
+  "unhandledRejection",
+  error => {
+    console.error(
+      "[Process] Unhandled rejection:",
+      error
+    );
+  }
+);
+
+process.on(
+  "uncaughtException",
+  error => {
+    console.error(
+      "[Process] Uncaught exception:",
+      error
+    );
+
+    // Do not intentionally process.exit here.
+    // Firebase outages and request failures should not kill Render.
+  }
+);
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+async function start() {
+  // Firebase initialization is attempted once.
+  initializeFirebaseOnce();
+
+  // Render becomes reachable even if Firebase is temporarily down.
+  app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+      console.log("========================================");
+      console.log(
+        `${SERVICE_NAME} server started`
+      );
+      console.log(`Port: ${PORT}`);
+      console.log(
+        "Server: ONLINE"
+      );
+      console.log(
+        `Firebase retries: ${FIREBASE_RETRIES}`
+      );
+      console.log(
+        `Firebase timeout: ${FIREBASE_TIMEOUT_MS}ms`
+      );
+      console.log(
+        `Firebase watchdog: ${FIREBASE_WATCHDOG_MS}ms`
+      );
+      console.log(
+        "Firebase write verification: ENABLED"
+      );
+      console.log("========================================");
+    }
+  );
+
+  // Test Firebase after the HTTP server is listening.
+  // This means Firebase being down cannot prevent Render from
+  // starting the web server.
+  await startupFirebaseTest();
+
+  startFirebaseWatchdog();
+}
+
+start().catch(error => {
+  // Last-resort protection: the web process stays alive.
+  console.error(
+    "[LBA] Startup protection caught an error:",
+    error
+  );
+
+  if (!firebaseReady) {
+    console.log(
+      "Firebase: OFFLINE"
+    );
+    console.log(
+      "Server: ONLINE"
+    );
+    console.log(
+      "Watchdog: RECONNECTING"
+    );
+  }
+
+  startFirebaseWatchdog();
 });
