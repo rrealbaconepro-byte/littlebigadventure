@@ -1,1596 +1,761 @@
 const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getAuth, getFirestore, FieldValue } = require("firebase-admin");
 
-const {
-  initializeApp,
-  cert,
-  getApps
-} = require("firebase-admin/app");
+const app = express();
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-const { getAuth } = require("firebase-admin/auth");
-
-const {
-  getFirestore,
-  FieldValue
-} = require("firebase-admin/firestore");
-
-// ==================================================
-// FIREBASE ADMIN
-// ==================================================
-
-const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-
-if (!serviceAccountRaw) {
+if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON");
 }
 
 let serviceAccount;
-
 try {
-  serviceAccount = JSON.parse(serviceAccountRaw);
-} catch (error) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+} catch {
   throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON");
 }
 
-if (!getApps().length) {
-  initializeApp({
-    credential: cert(serviceAccount)
+initializeApp({ credential: cert(serviceAccount) });
+const auth = getAuth();
+const db = getFirestore();
+
+function clean(v) { return String(v ?? "").trim(); }
+function lower(v) { return clean(v).toLowerCase(); }
+
+function error(res, status, message) {
+  return res.status(status).json({ success: false, error: message });
+}
+
+// Firebase is the source of truth.
+// Every important operation follows:
+// READ -> VALIDATE -> WRITE -> READ BACK
+
+async function readDoc(collection, id) {
+  if (!id) return null;
+  const snap = await db.collection(collection).doc(String(id)).get();
+  return snap.exists ? { id: snap.id, data: snap.data() || {} } : null;
+}
+
+async function readCollection(collection, limit = 500) {
+  const snap = await db.collection(collection).limit(limit).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function getNextUserId() {
+  const ref = db.collection("_system").doc("user_counter");
+
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const current = Number(snap.data()?.last_user_id || 0);
+    const next = current + 1;
+
+    tx.set(ref, {
+      last_user_id: next,
+      updated_at: FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    return next;
   });
 }
 
-const db = getFirestore();
-const auth = getAuth();
+async function ensureUserId(profileId, profile) {
+  const existing = Number(profile.user_id);
+  if (Number.isInteger(existing) && existing > 0) return existing;
 
-// ==================================================
-// EXPRESS
-// ==================================================
+  const profiles = await readCollection("profiles");
+  const ordered = profiles.sort((a, b) => {
+    const at = a.created_at?.toMillis?.() || 0;
+    const bt = b.created_at?.toMillis?.() || 0;
+    return at - bt;
+  });
 
-const app = express();
+  const index = ordered.findIndex(p => p.id === profileId);
+  const id = index >= 0 ? index + 1 : await getNextUserId();
 
-app.use(express.json({ limit: "1mb" }));
+  await db.collection("profiles").doc(profileId).set({
+    user_id: id,
+    updated_at: FieldValue.serverTimestamp()
+  }, { merge: true });
 
-app.use((req, res, next) => {
-  if (req.path.startsWith("/api/")) {
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.set("Pragma", "no-cache");
-    res.set("Expires", "0");
-  }
-  next();
-});
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
+  return id;
+}
 
-// ==================================================
-// AUTH HELPERS
-// ==================================================
+async function findProfile(identifier) {
+  const value = clean(identifier);
+  if (!value) return null;
 
-async function getCurrentUser(req) {
-  const sessionCookie = req.cookies?.session;
+  const direct = await readDoc("profiles", value);
+  if (direct) return direct;
 
-  if (sessionCookie) {
-    try {
-      return await auth.verifySessionCookie(sessionCookie, true);
-    } catch (error) {
-      // Continue to Bearer token.
+  const numeric = Number(value);
+  if (Number.isInteger(numeric)) {
+    for (const field of ["user_id", "profile_id", "id"]) {
+      const snap = await db.collection("profiles")
+        .where(field, "==", numeric).limit(1).get();
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        return { id: d.id, data: d.data() };
+      }
     }
   }
 
-  const authorization = req.headers.authorization || "";
+  const byName = await db.collection("profiles")
+    .where("username_lower", "==", lower(value))
+    .limit(1).get();
 
-  if (authorization.startsWith("Bearer ")) {
-    try {
-      return await auth.verifyIdToken(
-        authorization.substring(7).trim()
-      );
-    } catch (error) {
-      return null;
-    }
+  if (!byName.empty) {
+    const d = byName.docs[0];
+    return { id: d.id, data: d.data() };
   }
 
-  const firebaseToken = req.headers["x-firebase-token"];
+  const profiles = await readCollection("profiles");
+  const old = profiles.find(p => lower(p.username) === lower(value));
+  return old ? { id: old.id, data: old } : null;
+}
 
-  if (firebaseToken) {
+async function currentUser(req) {
+  if (req.cookies?.session) {
     try {
-      return await auth.verifyIdToken(String(firebaseToken));
-    } catch (error) {
-      return null;
-    }
+      const decoded = await auth.verifySessionCookie(req.cookies.session, true);
+      const profile = await readDoc("profiles", decoded.uid);
+      return { uid: decoded.uid, profile: profile?.data || null };
+    } catch {}
+  }
+
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : req.headers["x-firebase-token"];
+
+  if (token) {
+    try {
+      const decoded = await auth.verifyIdToken(token);
+      const profile = await readDoc("profiles", decoded.uid);
+      return { uid: decoded.uid, profile: profile?.data || null };
+    } catch {}
   }
 
   return null;
 }
 
 async function requireUser(req, res) {
-  const user = await getCurrentUser(req);
-
+  const user = await currentUser(req);
   if (!user) {
-    res.status(401).json({
-      error: "You must be logged in"
-    });
+    error(res, 401, "You must be logged in.");
     return null;
   }
-
   return user;
 }
 
-function cleanUsername(value) {
-  return String(value || "")
-    .trim()
-    .replace(/[^a-zA-Z0-9_.-]/g, "")
-    .slice(0, 30);
-}
-
-function cleanEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function createPrivateAuthEmail(username) {
-  return `${username.toLowerCase()}@lba.local`;
-}
-
-// ==================================================
-// USER ID SYSTEM
-// ==================================================
-//
-// New accounts receive a permanent numeric User ID.
-// Existing older profiles without user_id are resolved by
-// their original created_at order as a compatibility fallback.
-//
-
-async function getNextUserId() {
-  const ref = db.collection("_system").doc("user_counter");
-
-  return db.runTransaction(async transaction => {
-    const snapshot = await transaction.get(ref);
-
-    const current =
-      snapshot.exists && Number(snapshot.data().next_id)
-        ? Number(snapshot.data().next_id)
-        : 1;
-
-    transaction.set(
-      ref,
-      {
-        next_id: current + 1,
-        updated_at: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-
-    return current;
-  });
-}
-
-async function getProfileByUid(uid) {
-  const snapshot = await db
-    .collection("profiles")
-    .doc(String(uid))
-    .get();
-
-  if (!snapshot.exists) {
-    return null;
-  }
-
-  return {
-    id: snapshot.id,
-    ...snapshot.data()
-  };
-}
-
-async function getProfileByNumericId(userId) {
-  const numericId = Number(userId);
-
-  if (!Number.isInteger(numericId) || numericId < 1) {
-    return null;
-  }
-
-  // First use the permanent user_id field.
-  const direct = await db
-    .collection("profiles")
-    .where("user_id", "==", numericId)
-    .limit(1)
-    .get();
-
-  if (!direct.empty) {
-    const doc = direct.docs[0];
-
-    return {
-      id: doc.id,
-      ...doc.data()
-    };
-  }
-
-  // Compatibility with accounts created before numeric IDs
-  // were added: created_at order represents account order.
+app.get("/api/status", async (req, res) => {
   try {
-    const ordered = await db
-      .collection("profiles")
-      .orderBy("created_at", "asc")
-      .get();
-
-    if (numericId <= ordered.size) {
-      const doc = ordered.docs[numericId - 1];
-
-      return {
-        id: doc.id,
-        ...doc.data(),
-        user_id: numericId
-      };
-    }
-  } catch (error) {
-    console.warn(
-      "Could not resolve legacy numeric profile ID:",
-      error.message
-    );
+    const snap = await db.collection("_system").doc("server").get();
+    res.json({
+      online: true,
+      service: "LittleBigAdventure",
+      firebase: true,
+      firebase_readable: true,
+      firebase_document_exists: snap.exists
+    });
+  } catch {
+    res.status(503).json({
+      online: true,
+      service: "LittleBigAdventure",
+      firebase: false,
+      firebase_readable: false
+    });
   }
-
-  return null;
-}
-
-async function getProfileByIdentifier(identifier) {
-  const value = String(identifier || "").trim();
-
-  if (!value) return null;
-
-  // Firebase UID / document ID.
-  const byUid = await getProfileByUid(value);
-
-  if (byUid) {
-    return byUid;
-  }
-
-  // Numeric User ID.
-  if (/^\d+$/.test(value)) {
-    return await getProfileByNumericId(value);
-  }
-
-  // Username compatibility.
-  const usernameSnapshot = await db
-    .collection("profiles")
-    .where("username_lower", "==", value.toLowerCase())
-    .limit(1)
-    .get();
-
-  if (!usernameSnapshot.empty) {
-    const doc = usernameSnapshot.docs[0];
-
-    return {
-      id: doc.id,
-      ...doc.data()
-    };
-  }
-
-  return null;
-}
-
-// ==================================================
-// STATUS
-// ==================================================
-
-app.get("/api/status", (req, res) => {
-  res.json({
-    online: true,
-    service: "LittleBigAdventure",
-    firebase: true
-  });
 });
-
-// ==================================================
-// FIREBASE TEST
-// ==================================================
 
 app.get("/api/firebase-test", async (req, res) => {
   try {
     const ref = db.collection("_system").doc("server");
 
-    await ref.set(
-      {
-        online: true,
-        service: "LittleBigAdventure",
-        updatedAt: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
+    // READ
+    const before = await ref.get();
 
-    const snapshot = await ref.get();
+    // WRITE
+    await ref.set({
+      online: true,
+      service: "LittleBigAdventure",
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // READ BACK
+    const after = await ref.get();
 
     res.json({
       connected: true,
       firestore: true,
-      data: snapshot.data()
+      read_before_write: before.exists,
+      write_successful: true,
+      read_after_write: after.exists,
+      data: after.data()
     });
-  } catch (error) {
-    console.error("Firebase error:", error);
-
-    res.status(500).json({
-      connected: false,
-      firestore: false,
-      error: "Firebase connection failed"
-    });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Firebase connection failed.");
   }
 });
 
-// ==================================================
-// SESSION
-// ==================================================
-
 async function createSession(res, idToken) {
   const expiresIn = 1000 * 60 * 60 * 24 * 5;
+  const cookie = await auth.createSessionCookie(idToken, { expiresIn });
 
-  const sessionCookie = await auth.createSessionCookie(
-    idToken,
-    { expiresIn }
-  );
-
-  res.cookie("session", sessionCookie, {
-    maxAge: expiresIn,
+  res.cookie("session", cookie, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
     sameSite: "lax",
+    maxAge: expiresIn,
     path: "/"
   });
 }
 
-// ==================================================
-// SIGN UP
-// ==================================================
+async function signIn(email, password) {
+  const key = process.env.FIREBASE_WEB_API_KEY ||
+    "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
+
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email,
+        password,
+        returnSecureToken: true
+      })
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Login failed.");
+  }
+  return data;
+}
 
 app.post("/api/auth/signup", async (req, res) => {
-  let userRecord = null;
-
   try {
-    const username = cleanUsername(req.body.username);
+    const username = clean(req.body.username);
     const password = String(req.body.password || "");
-    const emailInput = cleanEmail(req.body.email);
+    const email = clean(req.body.email);
 
-    if (!username) {
-      return res.status(400).json({
-        error: "Username is required"
-      });
-    }
+    if (!username || !password) return error(res, 400, "Username and password are required.");
+    if (password.length < 6) return error(res, 400, "Password must be at least 6 characters.");
 
-    if (username.length < 3) {
-      return res.status(400).json({
-        error: "Username must be at least 3 characters"
-      });
-    }
+    // READ FIRST
+    const existing = await db.collection("profiles")
+      .where("username_lower", "==", lower(username))
+      .limit(1).get();
 
-    if (password.length < 6) {
-      return res.status(400).json({
-        error: "Password must be at least 6 characters"
-      });
-    }
+    if (!existing.empty) return error(res, 409, "Username is already taken.");
 
-    if (
-      emailInput &&
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)
-    ) {
-      return res.status(400).json({
-        error: "Please enter a valid email address"
-      });
-    }
-
-    const existingProfile = await db
-      .collection("profiles")
-      .where(
-        "username_lower",
-        "==",
-        username.toLowerCase()
-      )
-      .limit(1)
-      .get();
-
-    if (!existingProfile.empty) {
-      return res.status(409).json({
-        error: "Username is already taken"
-      });
-    }
-
-    const authEmail =
-      emailInput || createPrivateAuthEmail(username);
-
-    userRecord = await auth.createUser({
-      email: authEmail,
+    const firebaseUser = await auth.createUser({
+      email: email || undefined,
       password,
       displayName: username
     });
 
-    // Reserve the numeric ID only after Firebase Auth succeeds.
     const userId = await getNextUserId();
 
-    await db.collection("profiles").doc(userRecord.uid).set({
-      uid: userRecord.uid,
+    // WRITE
+    await db.collection("profiles").doc(firebaseUser.uid).set({
+      uid: firebaseUser.uid,
       user_id: userId,
       username,
-      username_lower: username.toLowerCase(),
+      username_lower: lower(username),
       display_name: username,
-      email: emailInput,
-      auth_email: authEmail,
-      bio: "",
+      email: email || "",
+      auth_email: email || "",
+      bio: "no username",
       avatar_url: "",
       created_at: FieldValue.serverTimestamp(),
       updated_at: FieldValue.serverTimestamp()
     });
 
-    const apiKey =
-      process.env.FIREBASE_WEB_API_KEY ||
-      "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
+    // READ BACK
+    const saved = await readDoc("profiles", firebaseUser.uid);
+    if (!saved) return error(res, 500, "Profile could not be read back.");
 
-    const signInResponse = await fetch(
-      "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" +
-        encodeURIComponent(apiKey),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          email: authEmail,
-          password,
-          returnSecureToken: true
-        })
-      }
-    );
-
-    const signInData = await signInResponse.json();
-
-    if (!signInResponse.ok || !signInData.idToken) {
-      throw new Error(
-        "Account created but login session could not be created"
-      );
+    if (email) {
+      const token = await signIn(email, password);
+      await createSession(res, token.idToken);
     }
-
-    await createSession(res, signInData.idToken);
-
-    res.status(201).json({
-      success: true,
-      user: {
-        uid: userRecord.uid,
-        user_id: userId,
-        username,
-        email: emailInput
-      }
-    });
-  } catch (error) {
-    console.error("Signup error:", error);
-
-    if (userRecord) {
-      try {
-        await auth.deleteUser(userRecord.uid);
-      } catch (deleteError) {
-        console.error(
-          "Could not roll back Firebase Auth user:",
-          deleteError
-        );
-      }
-    }
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to create account"
-    });
-  }
-});
-
-// ==================================================
-// LOGIN
-// ==================================================
-
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const username = cleanUsername(req.body.username);
-    const password = String(req.body.password || "");
-
-    if (!username || !password) {
-      return res.status(400).json({
-        error: "Username and password are required"
-      });
-    }
-
-    const profileQuery = await db
-      .collection("profiles")
-      .where(
-        "username_lower",
-        "==",
-        username.toLowerCase()
-      )
-      .limit(1)
-      .get();
-
-    if (profileQuery.empty) {
-      return res.status(401).json({
-        error: "Invalid username or password"
-      });
-    }
-
-    const profile = profileQuery.docs[0].data();
-
-    const apiKey =
-      process.env.FIREBASE_WEB_API_KEY ||
-      "AIzaSyAKAvsFCZ840VtMEV7w1t-ie_uil-KWuCk";
-
-    const response = await fetch(
-      "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" +
-        encodeURIComponent(apiKey),
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          email: profile.auth_email,
-          password,
-          returnSecureToken: true
-        })
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(401).json({
-        error: "Invalid username or password"
-      });
-    }
-
-    await createSession(res, data.idToken);
 
     res.json({
       success: true,
       user: {
-        uid: data.localId,
-        user_id: profile.user_id || null,
-        username: profile.username,
-        email: profile.email || ""
+        uid: firebaseUser.uid,
+        user_id: saved.data.user_id,
+        username: saved.data.username
       }
     });
-  } catch (error) {
-    console.error("Login error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Login failed"
-    });
+  } catch (e) {
+    console.error("Signup:", e);
+    error(res, 500, e.message || "Failed to create account.");
   }
 });
 
-// ==================================================
-// CURRENT USER
-// ==================================================
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const username = clean(req.body.username);
+    const password = String(req.body.password || "");
+    const found = await findProfile(username);
+
+    if (!found) return error(res, 401, "Invalid username or password.");
+
+    const email = found.data.auth_email || found.data.email;
+    if (!email) return error(res, 401, "This account has no login email.");
+
+    const token = await signIn(email, password);
+    await createSession(res, token.idToken);
+
+    const saved = await readDoc("profiles", token.localId);
+
+    res.json({
+      success: true,
+      user: {
+        uid: token.localId,
+        user_id: saved?.data?.user_id || null,
+        username: saved?.data?.username || username,
+        display_name: saved?.data?.display_name || username
+      }
+    });
+  } catch (e) {
+    console.error("Login:", e);
+    error(res, 401, "Invalid username or password.");
+  }
+});
 
 app.get("/api/auth/me", async (req, res) => {
   try {
-    const user = await getCurrentUser(req);
+    const user = await currentUser(req);
+    if (!user) return res.json({ authenticated: false, user: null });
 
-    if (!user) {
-      return res.status(401).json({
-        authenticated: false
-      });
-    }
-
-    const profile = await getProfileByUid(user.uid);
+    const profile = await readDoc("profiles", user.uid);
 
     res.json({
       authenticated: true,
       user: {
         uid: user.uid,
-        user_id: profile?.user_id || null,
-        username:
-          profile?.username ||
-          user.name ||
-          "",
-        display_name:
-          profile?.display_name ||
-          profile?.username ||
-          user.name ||
-          "",
-        email:
-          profile?.email ||
-          ""
+        user_id: profile?.data?.user_id || null,
+        username: profile?.data?.username || "No username",
+        display_name: profile?.data?.display_name || profile?.data?.username || "No username",
+        bio: profile?.data?.bio || "",
+        avatar_url: profile?.data?.avatar_url || ""
       }
     });
-  } catch (error) {
-    console.error("Auth/me error:", error);
-
-    res.status(500).json({
-      authenticated: false,
-      error: "Failed to get account"
-    });
+  } catch {
+    error(res, 500, "Failed to read account.");
   }
 });
-
-// ==================================================
-// LOGOUT
-// ==================================================
 
 app.post("/api/auth/logout", (req, res) => {
   res.clearCookie("session", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
     sameSite: "lax",
     path: "/"
   });
-
-  res.json({
-    success: true
-  });
+  res.json({ success: true });
 });
 
-// ==================================================
-// PLAYERS
-// ==================================================
+// ---------------- PLAYERS ----------------
 
 app.get("/api/players", async (req, res) => {
   try {
-    const snapshot = await db
-      .collection("profiles")
-      .orderBy("created_at", "desc")
-      .limit(50)
-      .get();
-
-    const players = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        uid: data.uid || doc.id,
-        user_id: data.user_id || null,
-        username: data.username || "",
-        display_name:
-          data.display_name ||
-          data.username ||
-          "",
-        bio: data.bio || "",
-        avatar_url: data.avatar_url || "",
-        created_at: data.created_at || null
-      };
+    const profiles = await readCollection("profiles");
+    res.json({
+      players: profiles.map(p => ({
+        id: p.id,
+        uid: p.uid || p.id,
+        user_id: p.user_id || null,
+        username: p.username || "No username found",
+        display_name: p.display_name || p.username || "No username found",
+        avatar_url: p.avatar_url || ""
+      }))
     });
-
-    res.json({ players });
-  } catch (error) {
-    console.error("Players error:", error);
-
-    res.status(500).json({
-      error: "Failed to load players",
-      players: []
-    });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to read players.");
   }
 });
 
-// ==================================================
-// PROFILE
-// Supports:
-// /api/profile/1
-// /api/profile/FIREBASE_UID
-// /api/profile/username
-// /api/profiles/1
-// /api/profiles/FIREBASE_UID
-// ==================================================
+// ---------------- PROFILES ----------------
 
-async function profileRoute(req, res) {
-  try {
-    const identifier = req.params.id;
-    let profile = await getProfileByIdentifier(identifier);
+async function levelsForProfile(profileId, profile, userId) {
+  const levels = await readCollection("levels");
 
-    if (!profile) {
-      return res.status(404).json({
-        found: false,
-        error: "Player not found"
-      });
-    }
+  return levels.filter(level => {
+    const creatorUid = level.uid || level.creator_uid || level.creator_user_id || level.user_id;
+    const creatorUserId = level.creator_user_id || level.user_id;
+    const creatorName = lower(level.username || level.creator_username || level.creator);
 
-    // Give older accounts a permanent numeric ID automatically.
-    if (!profile.user_id) {
-      try {
-        const allProfiles = await db
-          .collection("profiles")
-          .orderBy("created_at", "asc")
-          .get();
-
-        const index = allProfiles.docs.findIndex(doc => doc.id === profile.id);
-        if (index >= 0) {
-          const generatedId = index + 1;
-          await db.collection("profiles").doc(profile.id).set({
-            user_id: generatedId,
-            updated_at: FieldValue.serverTimestamp()
-          }, { merge: true });
-          profile.user_id = generatedId;
-        }
-      } catch (migrationError) {
-        console.warn("Could not assign legacy User ID:", migrationError.message);
-      }
-    }
-
-    const userId = Number.isInteger(Number(profile.user_id))
-      ? Number(profile.user_id)
-      : null;
-
-    const profilePosts = [];
-    const seenPostIds = new Set();
-
-    if (userId !== null) {
-      const snap = await db.collection("profile_posts")
-        .where("profile_user_id", "==", userId)
-        .get();
-      snap.docs.forEach(doc => {
-        seenPostIds.add(doc.id);
-        profilePosts.push({ id: doc.id, ...doc.data() });
-      });
-    }
-
-    const profileUid = profile.uid || profile.id;
-    if (profileUid) {
-      const snap = await db.collection("profile_posts")
-        .where("profile_uid", "==", profileUid)
-        .get();
-      snap.docs.forEach(doc => {
-        if (!seenPostIds.has(doc.id)) {
-          seenPostIds.add(doc.id);
-          profilePosts.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    }
-
-    const levels = [];
-    const seenLevelIds = new Set();
-
-    if (userId !== null) {
-      const byNumber = await db.collection("levels")
-        .where("creator_user_id", "==", userId)
-        .get();
-      byNumber.docs.forEach(doc => {
-        seenLevelIds.add(doc.id);
-        levels.push({ id: doc.id, ...doc.data() });
-      });
-
-      const oldNumber = await db.collection("levels")
-        .where("user_id", "==", userId)
-        .get();
-      oldNumber.docs.forEach(doc => {
-        if (!seenLevelIds.has(doc.id)) {
-          seenLevelIds.add(doc.id);
-          levels.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    }
-
-    if (profileUid) {
-      const byUid = await db.collection("levels")
-        .where("uid", "==", profileUid)
-        .get();
-      byUid.docs.forEach(doc => {
-        if (!seenLevelIds.has(doc.id)) {
-          seenLevelIds.add(doc.id);
-          levels.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    }
-
-    const followerSnap = userId === null ? { size: 0 } : await db.collection("follows")
-      .where("following_user_id", "==", userId)
-      .get();
-    const followingSnap = userId === null ? { size: 0 } : await db.collection("follows")
-      .where("follower_user_id", "==", userId)
-      .get();
-    const friendSnap = userId === null ? { size: 0 } : await db.collection("friends")
-      .where("user_ids", "array-contains", userId)
-      .get();
-
-    const current = await getCurrentUser(req);
-    let currentProfile = current ? await getProfileByUid(current.uid) : null;
-    const currentUserId = currentProfile?.user_id || null;
-
-    let isFollowing = false;
-    let isFriend = false;
-
-    if (currentUserId && userId !== null) {
-      isFollowing = followerSnap.docs.some(doc => {
-        const data = doc.data();
-        return Number(data.follower_user_id) === Number(currentUserId);
-      });
-
-      isFriend = friendSnap.docs.some(doc => {
-        const ids = doc.data().user_ids || [];
-        return ids.map(Number).includes(Number(currentUserId));
-      });
-    }
-
-    res.json({
-      found: true,
-      profile: {
-        id: profile.id,
-        uid: profileUid,
-        user_id: userId,
-        username: profile.username || "",
-        display_name: profile.display_name || profile.username || "",
-        bio: profile.bio || "",
-        avatar_url: profile.avatar_url || "",
-        email: profile.email || "",
-        created_at: profile.created_at || null,
-        followers: followerSnap.size || 0,
-        following: followingSnap.size || 0,
-        friends: friendSnap.size || 0,
-        games: levels.length,
-        posts: profilePosts.length,
-        is_owner: !!current && current.uid === profileUid,
-        is_following: isFollowing,
-        is_friend: isFriend
-      },
-      posts: profilePosts,
-      levels
-    });
-  } catch (error) {
-    console.error("Profile read error:", error);
-    res.status(500).json({ found: false, error: "Failed to load profile" });
-  }
+    return creatorUid === (profile.uid || profileId) ||
+      String(creatorUserId) === String(userId) ||
+      creatorName === lower(profile.username);
+  });
 }
 
-app.get("/api/profile/:id", profileRoute);
-app.get("/api/profiles/:id", profileRoute);
+async function postsForProfile(profileId, profile, userId) {
+  const posts = await readCollection("posts");
 
-// Compatibility routes used by Profile.html.
-app.get("/api/profile/:id/levels", async (req, res) => {
+  return posts.filter(post => {
+    const authorUid = post.uid || post.author_uid || post.author_user_id || post.user_id;
+    const authorUserId = post.author_user_id || post.user_id;
+    const authorName = lower(post.username || post.author_username || post.author);
+
+    return authorUid === (profile.uid || profileId) ||
+      String(authorUserId) === String(userId) ||
+      authorName === lower(profile.username);
+  });
+}
+
+async function profilePayload(identifier) {
+  const found = await findProfile(identifier);
+  if (!found) return null;
+
+  const userId = await ensureUserId(found.id, found.data);
+  const levels = await levelsForProfile(found.id, found.data, userId);
+  const posts = await postsForProfile(found.id, found.data, userId);
+
+  const followers = await db.collection("follows")
+    .where("following_uid", "==", found.id).get();
+
+  const following = await db.collection("follows")
+    .where("follower_uid", "==", found.id).get();
+
+  const friends = await db.collection("friends")
+    .where("users", "array-contains", found.id).get();
+
+  return {
+    id: found.id,
+    uid: found.data.uid || found.id,
+    user_id: userId,
+    username: found.data.username || "No username",
+    display_name: found.data.display_name || found.data.username || "No username",
+    bio: found.data.bio || "no username",
+    avatar_url: found.data.avatar_url || "",
+    levels,
+    posts,
+    followers: followers.size,
+    following: following.size,
+    friends: friends.size
+  };
+}
+
+app.get("/api/profile/:id", async (req, res) => {
   try {
-    const profile = await getProfileByIdentifier(req.params.id);
-    if (!profile) return res.status(404).json({ error: "Player not found", levels: [] });
-
-    const uid = profile.uid || profile.id;
-    const userId = Number(profile.user_id);
-    const results = [];
-    const seen = new Set();
-
-    if (Number.isInteger(userId) && userId > 0) {
-      for (const field of ["creator_user_id", "user_id"]) {
-        const snap = await db.collection("levels").where(field, "==", userId).get();
-        snap.docs.forEach(doc => {
-          if (!seen.has(doc.id)) {
-            seen.add(doc.id);
-            results.push({ id: doc.id, ...doc.data() });
-          }
-        });
-      }
-    }
-
-    if (uid) {
-      const snap = await db.collection("levels").where("uid", "==", uid).get();
-      snap.docs.forEach(doc => {
-        if (!seen.has(doc.id)) {
-          seen.add(doc.id);
-          results.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    }
-
-    // Legacy levels sometimes stored the creator as a username instead of UID.
-    const usernames = [profile.username, profile.display_name].filter(Boolean);
-    for (const field of ["creator", "creator_username", "username"]) {
-      for (const username of usernames) {
-        try {
-          const snap = await db.collection("levels").where(field, "==", username).get();
-          snap.docs.forEach(doc => {
-            if (!seen.has(doc.id)) {
-              seen.add(doc.id);
-              results.push({ id: doc.id, ...doc.data() });
-            }
-          });
-        } catch (_) {}
-      }
-    }
-
-    res.json({ levels: results });
-  } catch (error) {
-    console.error("Profile levels error:", error);
-    res.status(500).json({ error: "Failed to load profile levels", levels: [] });
+    const profile = await profilePayload(req.params.id);
+    if (!profile) return res.status(404).json({ found: false, profile: null });
+    res.json({ found: true, profile });
+  } catch (e) {
+    console.error("Profile:", e);
+    error(res, 500, "Failed to read profile.");
   }
 });
 
-app.get("/api/profile/:id/posts", async (req, res) => {
+app.get("/api/profiles/:id", async (req, res) => {
   try {
-    const profile = await getProfileByIdentifier(req.params.id);
-    if (!profile) return res.status(404).json({ error: "Player not found", posts: [] });
-
-    const results = [];
-    const seen = new Set();
-    const uid = profile.uid || profile.id;
-    const userId = Number(profile.user_id);
-
-    if (Number.isInteger(userId) && userId > 0) {
-      const snap = await db.collection("profile_posts")
-        .where("profile_user_id", "==", userId).get();
-      snap.docs.forEach(doc => {
-        seen.add(doc.id);
-        results.push({ id: doc.id, ...doc.data() });
-      });
-    }
-
-    if (uid) {
-      const snap = await db.collection("profile_posts")
-        .where("profile_uid", "==", uid).get();
-      snap.docs.forEach(doc => {
-        if (!seen.has(doc.id)) {
-          seen.add(doc.id);
-          results.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    }
-
-    res.json({ posts: results });
-  } catch (error) {
-    console.error("Profile posts error:", error);
-    res.status(500).json({ error: "Failed to load profile posts", posts: [] });
+    const profile = await profilePayload(req.params.id);
+    if (!profile) return res.status(404).json({ found: false, profile: null });
+    res.json({ found: true, profile });
+  } catch (e) {
+    console.error("Profile:", e);
+    error(res, 500, "Failed to read profile.");
   }
 });
 
-// ==================================================
-// PROFILE UPDATE
-// ==================================================
+// ---------------- POSTS ----------------
 
-app.post("/api/profile/update", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
-  try {
-    const updates = {
-      updated_at: FieldValue.serverTimestamp()
-    };
-
-    if (req.body.display_name !== undefined) {
-      updates.display_name =
-        String(req.body.display_name)
-          .trim()
-          .slice(0, 40);
-    }
-
-    if (req.body.bio !== undefined) {
-      updates.bio =
-        String(req.body.bio)
-          .trim()
-          .slice(0, 500);
-    }
-
-    if (req.body.avatar_url !== undefined) {
-      updates.avatar_url =
-        String(req.body.avatar_url)
-          .trim()
-          .slice(0, 1000);
-    }
-
-    await db
-      .collection("profiles")
-      .doc(user.uid)
-      .set(updates, { merge: true });
-
-    res.json({
-      success: true
-    });
-  } catch (error) {
-    console.error("Profile update error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to update profile"
-    });
-  }
-});
-
-// ==================================================
-// PROFILE POSTS / SOCIAL ACTIONS
-// ==================================================
-
-app.post("/api/profile/:id/posts", async (req, res) => {
-  const user = await requireUser(req, res);
-  if (!user) return;
-
-  try {
-    const target = await getProfileByIdentifier(req.params.id);
-    if (!target) return res.status(404).json({ error: "Player not found" });
-
-    const text = String(req.body.text || "").trim();
-    if (!text) return res.status(400).json({ error: "Post text is required" });
-    if (text.length > 2000) return res.status(400).json({ error: "Post is too long" });
-
-    const author = await getProfileByUid(user.uid);
-    const ref = db.collection("profile_posts").doc();
-    await ref.set({
-      profile_user_id: Number(target.user_id) || null,
-      profile_uid: target.uid || target.id,
-      uid: user.uid,
-      user_id: author?.user_id || null,
-      author: author?.display_name || author?.username || user.name || "Player",
-      username: author?.username || user.name || "Player",
-      text,
-      created_at: FieldValue.serverTimestamp()
-    });
-
-    res.status(201).json({ success: true, id: ref.id });
-  } catch (error) {
-    console.error("Profile post create error:", error);
-    res.status(500).json({ success: false, error: "Failed to post on profile" });
-  }
-});
-
-app.patch("/api/profile/me", async (req, res) => {
-  const user = await requireUser(req, res);
-  if (!user) return;
-
-  try {
-    const updates = { updated_at: FieldValue.serverTimestamp() };
-    if (req.body.display_name !== undefined) {
-      updates.display_name = String(req.body.display_name).trim().slice(0, 40);
-    }
-    if (req.body.bio !== undefined) {
-      updates.bio = String(req.body.bio).trim().slice(0, 500);
-    }
-    if (req.body.avatar_url !== undefined) {
-      updates.avatar_url = String(req.body.avatar_url).trim().slice(0, 1000);
-    }
-
-    await db.collection("profiles").doc(user.uid).set(updates, { merge: true });
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Profile update error:", error);
-    res.status(500).json({ success: false, error: "Failed to update profile" });
-  }
-});
-
-app.post("/api/profile/:id/follow", async (req, res) => {
-  const user = await requireUser(req, res);
-  if (!user) return;
-
-  try {
-    const target = await getProfileByIdentifier(req.params.id);
-    const me = await getProfileByUid(user.uid);
-    if (!target || !me) return res.status(404).json({ error: "Player not found" });
-    if (Number(target.user_id) === Number(me.user_id)) return res.status(400).json({ error: "You cannot follow yourself" });
-
-    const q = await db.collection("follows")
-      .where("follower_user_id", "==", Number(me.user_id))
-      .where("following_user_id", "==", Number(target.user_id))
-      .limit(1).get();
-
-    if (!q.empty) {
-      await q.docs[0].ref.delete();
-      return res.json({ success: true, following: false });
-    }
-
-    await db.collection("follows").add({
-      follower_user_id: Number(me.user_id),
-      following_user_id: Number(target.user_id),
-      created_at: FieldValue.serverTimestamp()
-    });
-    res.json({ success: true, following: true });
-  } catch (error) {
-    console.error("Follow error:", error);
-    res.status(500).json({ success: false, error: "Failed to update follow" });
-  }
-});
-
-app.post("/api/profile/:id/friend", async (req, res) => {
-  const user = await requireUser(req, res);
-  if (!user) return;
-
-  try {
-    const target = await getProfileByIdentifier(req.params.id);
-    const me = await getProfileByUid(user.uid);
-    if (!target || !me) return res.status(404).json({ error: "Player not found" });
-    if (Number(target.user_id) === Number(me.user_id)) return res.status(400).json({ error: "You cannot friend yourself" });
-
-    const ids = [Number(me.user_id), Number(target.user_id)].sort((a,b) => a-b);
-    const q = await db.collection("friends")
-      .where("user_ids", "==", ids)
-      .limit(1).get();
-
-    if (!q.empty) {
-      await q.docs[0].ref.delete();
-      return res.json({ success: true, friend: false });
-    }
-
-    await db.collection("friends").add({
-      user_ids: ids,
-      created_at: FieldValue.serverTimestamp()
-    });
-    res.json({ success: true, friend: true });
-  } catch (error) {
-    console.error("Friend error:", error);
-    res.status(500).json({ success: false, error: "Failed to update friendship" });
-  }
-});
-
-// ==================================================
-// POSTS
-// ==================================================
-
-app.get("/api/posts", async (req, res) => {
-  try {
-    const snapshot = await db
-      .collection("posts")
-      .orderBy("created_at", "desc")
-      .limit(50)
-      .get();
-
-    const posts = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        author: data.author || data.username || "",
-        username: data.username || data.author || "",
-        text: data.text || "",
-        uid: data.uid || data.authorUid || "",
-        user_id: data.user_id || null,
-        avatar_url: data.avatar_url || "",
-        created_at: data.created_at || data.createdAt || null
-      };
-    });
-
-    res.json({ posts });
-  } catch (error) {
-    console.error("Posts read error:", error);
-
-    res.status(500).json({
-      error: "Failed to load posts",
-      posts: []
-    });
-  }
-});
-
-async function findPostByIdentifier(identifier) {
-  const value = String(identifier || '').trim();
+async function findPost(identifier) {
+  const value = clean(identifier);
   if (!value) return null;
 
-  let snap = await db.collection('posts').doc(value).get();
-  if (snap.exists) return { id: snap.id, ...snap.data() };
+  const direct = await readDoc("posts", value);
+  if (direct) return direct;
 
-  for (const field of ['post_id', 'id']) {
-    try {
-      let q = await db.collection('posts').where(field, '==', value).limit(1).get();
-      if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
-      if (/^\d+$/.test(value)) {
-        q = await db.collection('posts').where(field, '==', Number(value)).limit(1).get();
-        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
-      }
-    } catch (_) {}
-  }
-
-  if (/^\d+$/.test(value)) {
-    const n = Number(value);
-    try {
-      const ordered = await db.collection('posts').orderBy('created_at', 'asc').get();
-      if (n >= 1 && n <= ordered.size) {
-        const doc = ordered.docs[n - 1];
-        return { id: doc.id, ...doc.data() };
-      }
-    } catch (_) {}
+  for (const field of ["post_id", "id", "postId"]) {
+    const snap = await db.collection("posts").where(field, "==", value).limit(1).get();
+    if (!snap.empty) {
+      const d = snap.docs[0];
+      return { id: d.id, data: d.data() };
+    }
   }
 
   return null;
 }
 
-app.get('/api/posts/:id', async (req, res) => {
+async function readReplies(postId) {
+  const output = [];
+  const seen = new Set();
+
+  for (const collection of ["post_replies", "replies"]) {
+    const snap = await db.collection(collection)
+      .where("post_id", "==", String(postId)).get();
+
+    for (const d of snap.docs) {
+      if (!seen.has(d.id)) {
+        seen.add(d.id);
+        output.push({ id: d.id, ...d.data() });
+      }
+    }
+  }
+
+  output.sort((a, b) =>
+    (a.created_at?.toMillis?.() || 0) -
+    (b.created_at?.toMillis?.() || 0)
+  );
+
+  return output;
+}
+
+async function postPayload(identifier) {
+  const found = await findPost(identifier);
+  if (!found) return null;
+
+  const post = found.data;
+  const authorUid = post.uid || post.author_uid || post.author_user_id || post.user_id;
+  const authorProfile = authorUid ? await readDoc("profiles", authorUid) : null;
+
+  return {
+    id: found.id,
+    title: post.title || post.text || "No post found",
+    text: post.text || post.body || "no post",
+    author: authorProfile?.data?.display_name || authorProfile?.data?.username || post.author || post.username || "No username found",
+    author_user_id: authorProfile?.data?.user_id || post.author_user_id || post.user_id || "?",
+    author_uid: authorProfile?.id || authorUid || "",
+    avatar_url: authorProfile?.data?.avatar_url || post.avatar_url || "",
+    created_at: post.created_at || post.createdAt || null,
+    replies: await readReplies(found.id)
+  };
+}
+
+app.get("/api/posts", async (req, res) => {
   try {
-    const requestedId = String(req.params.id);
-    const post = await findPostByIdentifier(requestedId);
+    const posts = await readCollection("posts");
+    posts.sort((a, b) =>
+      (b.created_at?.toMillis?.() || 0) -
+      (a.created_at?.toMillis?.() || 0)
+    );
+    res.json({ posts });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to read posts.");
+  }
+});
 
-    if (!post) {
-      return res.status(404).json({
-        found: false,
-        id: requestedId,
-        title: 'No post found',
-        author: 'No username found',
-        text: 'no post',
-        replies: []
-      });
-    }
-
-    const postId = String(post.id);
-    const data = post;
-    const replies = [];
-    const seenReplyIds = new Set();
-
-    const replyQueries = [
-      db.collection('post_replies').where('post_id', '==', postId).get(),
-      db.collection('replies').where('post_id', '==', postId).get()
-    ];
-
-    if (/^\d+$/.test(postId)) {
-      const numericId = Number(postId);
-      replyQueries.push(db.collection('post_replies').where('post_id', '==', numericId).get());
-      replyQueries.push(db.collection('replies').where('post_id', '==', numericId).get());
-    }
-
-    const replySnapshots = await Promise.all(replyQueries);
-    replySnapshots.forEach(replySnapshot => {
-      replySnapshot.docs.forEach(doc => {
-        if (!seenReplyIds.has(doc.id)) {
-          seenReplyIds.add(doc.id);
-          replies.push({ id: doc.id, ...doc.data() });
-        }
-      });
-    });
-
-    replies.sort((a, b) => {
-      const getTime = item => {
-        if (item?.created_at?._seconds) return item.created_at._seconds;
-        if (item?.createdAt?._seconds) return item.createdAt._seconds;
-        const parsed = Date.parse(item?.created_at || item?.createdAt || 0);
-        return Number.isFinite(parsed) ? parsed / 1000 : 0;
-      };
-      return getTime(a) - getTime(b);
-    });
-
-    res.json({
-      found: true,
-      post: {
-        id: post.id,
-        title: data.title || data.text?.slice(0, 80) || 'Post',
-        author: data.author || data.username || 'No username found',
-        author_username: data.username || data.author || 'no username',
-        author_user_id: data.user_id || data.author_user_id || null,
-        uid: data.uid || data.authorUid || '',
-        avatar_url: data.avatar_url || '',
-        text: data.text || data.message || 'no post',
-        created_at: data.created_at || data.createdAt || null
-      },
-      replies
-    });
-  } catch (error) {
-    console.error('Post read error:', error);
-    res.status(500).json({ found: false, error: 'Failed to load post' });
+app.get("/api/posts/:id", async (req, res) => {
+  try {
+    const post = await postPayload(req.params.id);
+    if (!post) return res.status(404).json({ found: false, post: null });
+    res.json({ found: true, post });
+  } catch (e) {
+    console.error("Post:", e);
+    error(res, 500, "Failed to read post.");
   }
 });
 
 app.post("/api/posts", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
   try {
-    const text = String(req.body.text || "").trim();
+    const user = await requireUser(req, res);
+    if (!user) return;
 
-    if (!text) {
-      return res.status(400).json({
-        error: "Post text is required"
-      });
-    }
+    const text = clean(req.body.text);
+    if (!text) return error(res, 400, "Post cannot be empty.");
 
-    if (text.length > 2000) {
-      return res.status(400).json({
-        error: "Post is too long"
-      });
-    }
+    const profile = await readDoc("profiles", user.uid);
+    if (!profile) return error(res, 404, "Your profile could not be found.");
 
-    const profile = await getProfileByUid(user.uid);
+    const userId = await ensureUserId(user.uid, profile.data);
+    const ref = db.collection("posts").doc();
 
-    const username =
-      profile?.username ||
-      user.name ||
-      user.email ||
-      "Player";
-
-    const postRef = db.collection("posts").doc();
-
-    await postRef.set({
+    // WRITE
+    await ref.set({
       uid: user.uid,
-      user_id: profile?.user_id || null,
-      author: username,
-      username,
-      avatar_url: profile?.avatar_url || "",
+      user_id: userId,
+      username: profile.data.username || "No username",
+      author: profile.data.display_name || profile.data.username || "No username",
+      avatar_url: profile.data.avatar_url || "",
       text,
-      created_at: FieldValue.serverTimestamp()
+      created_at: FieldValue.serverTimestamp(),
+      updated_at: FieldValue.serverTimestamp()
     });
 
-    res.status(201).json({
-      success: true,
-      id: postRef.id
-    });
-  } catch (error) {
-    console.error("Post create error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to create post"
-    });
+    // READ BACK
+    const saved = await postPayload(ref.id);
+    res.json({ success: true, post: saved });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to create post.");
   }
 });
-
-// ==================================================
-// POST REPLIES
-// ==================================================
 
 app.post("/api/posts/:id/replies", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
   try {
-    const postId = String(req.params.id);
+    const user = await requireUser(req, res);
+    if (!user) return;
 
-    const postRecord = await findPostByIdentifier(postId);
+    const text = clean(req.body.text);
+    if (!text) return error(res, 400, "Reply cannot be empty.");
 
-    if (!postRecord) {
-      return res.status(404).json({
-        error: "Post not found"
-      });
-    }
+    // READ POST FIRST
+    const post = await findPost(req.params.id);
+    if (!post) return error(res, 404, "Post not found.");
 
-    const actualPostId = String(postRecord.id);
+    const profile = await readDoc("profiles", user.uid);
+    if (!profile) return error(res, 404, "Your profile could not be found.");
 
-    const text = String(req.body.text || "").trim();
+    const userId = await ensureUserId(user.uid, profile.data);
 
-    if (!text) {
-      return res.status(400).json({
-        error: "Reply text is required"
-      });
-    }
-
-    if (text.length > 2000) {
-      return res.status(400).json({
-        error: "Reply is too long"
-      });
-    }
-
-    const profile = await getProfileByUid(user.uid);
-
-    const replyRef = db
-      .collection("post_replies")
-      .doc();
-
-    await replyRef.set({
-      post_id: actualPostId,
+    // WRITE
+    const ref = db.collection("post_replies").doc();
+    await ref.set({
+      post_id: String(post.id),
       uid: user.uid,
-      user_id: profile?.user_id || null,
-      author:
-        profile?.display_name ||
-        profile?.username ||
-        user.name ||
-        "Player",
-      username:
-        profile?.username ||
-        user.name ||
-        "Player",
-      avatar_url:
-        profile?.avatar_url ||
-        "",
+      user_id: userId,
+      username: profile.data.username || "No username",
+      author: profile.data.display_name || profile.data.username || "No username",
       text,
       created_at: FieldValue.serverTimestamp()
     });
 
-    // Return the new reply immediately so Post.html can render it without waiting.
-    res.status(201).json({
+    // READ BACK
+    const replies = await readReplies(post.id);
+    res.json({
       success: true,
-      id: replyRef.id,
-      reply: {
-        id: replyRef.id,
-        post_id: postId,
-        uid: user.uid,
-        user_id: profile?.user_id || null,
-        author: profile?.display_name || profile?.username || user.name || "Player",
-        username: profile?.username || user.name || "Player",
-        avatar_url: profile?.avatar_url || "",
-        text,
-        created_at: new Date().toISOString()
-      }
+      reply: { id: ref.id, post_id: post.id, text },
+      replies
     });
-  } catch (error) {
-    console.error("Reply create error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to create reply"
-    });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to create reply.");
   }
 });
 
-// ==================================================
-// LEVELS
-// ==================================================
+// ---------------- LEVELS ----------------
 
-app.get("/api/levels", async (req, res) => {
-  try {
-    const snapshot = await db
-      .collection("levels")
-      .orderBy("created_at", "desc")
-      .limit(100)
-      .get();
-
-    const levels = snapshot.docs.map(doc => {
-      const data = doc.data();
-
-      return {
-        id: doc.id,
-        name:
-          data.name ||
-          data.title ||
-          "",
-        creator:
-          data.creator ||
-          data.username ||
-          "",
-        creator_username:
-          data.creator_username ||
-          data.username ||
-          data.creator ||
-          "",
-        creator_user_id:
-          data.creator_user_id ||
-          data.user_id ||
-          null,
-        uid:
-          data.uid ||
-          data.creatorUid ||
-          "",
-        description:
-          data.description ||
-          "",
-        thumbnail_url:
-          data.thumbnail_url ||
-          "",
-        hearts:
-          data.hearts || 0,
-        likes:
-          data.likes || 0,
-        followers:
-          data.followers || 0,
-        plays:
-          data.plays || 0,
-        created_at:
-          data.created_at ||
-          data.createdAt ||
-          null
-      };
-    });
-
-    res.json({ levels });
-  } catch (error) {
-    console.error("Levels read error:", error);
-
-    res.status(500).json({
-      error: "Failed to load levels",
-      levels: []
-    });
-  }
-});
-
-async function findLevelByIdentifier(identifier) {
-  const value = String(identifier || '').trim();
+async function findLevel(identifier) {
+  const value = clean(identifier);
   if (!value) return null;
 
-  // 1. Exact Firestore document ID.
-  let snap = await db.collection('levels').doc(value).get();
-  if (snap.exists) return { id: snap.id, ...snap.data() };
+  const direct = await readDoc("levels", value);
+  if (direct) return direct;
 
-  // 2. Stored ID fields, supporting both strings and numbers.
-  const fields = ['level_id', 'id', 'levelId', 'levelID'];
-  for (const field of fields) {
-    try {
-      let q = await db.collection('levels').where(field, '==', value).limit(1).get();
-      if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+  for (const field of ["level_id", "id", "levelId"]) {
+    const textSnap = await db.collection("levels").where(field, "==", value).limit(1).get();
+    if (!textSnap.empty) {
+      const d = textSnap.docs[0];
+      return { id: d.id, data: d.data() };
+    }
 
-      if (/^\d+$/.test(value)) {
-        q = await db.collection('levels').where(field, '==', Number(value)).limit(1).get();
-        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
-      }
-    } catch (_) {}
-  }
-
-  // 3. Numeric level URLs can represent creation order.
-  if (/^\d+$/.test(value)) {
     const numeric = Number(value);
-    try {
-      const ordered = await db.collection('levels').orderBy('created_at', 'asc').get();
-      if (numeric >= 1 && numeric <= ordered.size) {
-        const doc = ordered.docs[numeric - 1];
-        return { id: doc.id, ...doc.data() };
+    if (Number.isInteger(numeric)) {
+      const numberSnap = await db.collection("levels").where(field, "==", numeric).limit(1).get();
+      if (!numberSnap.empty) {
+        const d = numberSnap.docs[0];
+        return { id: d.id, data: d.data() };
       }
-    } catch (_) {
-      // Some legacy documents may not have created_at.
-      try {
-        const fallback = await db.collection('levels').get();
-        const docs = fallback.docs.slice().sort((a, b) => {
-          const av = a.data().created_at?._seconds || 0;
-          const bv = b.data().created_at?._seconds || 0;
-          return av - bv;
-        });
-        if (numeric >= 1 && numeric <= docs.length) {
-          const doc = docs[numeric - 1];
-          return { id: doc.id, ...doc.data() };
-        }
-      } catch (_) {}
     }
   }
 
   return null;
 }
 
+async function levelPayload(identifier) {
+  const found = await findLevel(identifier);
+  if (!found) return null;
+
+  const level = found.data;
+  const creatorUid = level.uid || level.creator_uid || level.creator_user_id || level.user_id;
+  const creatorProfile = creatorUid ? await findProfile(creatorUid) : null;
+
+  return {
+    id: found.id,
+    name: level.name || level.title || "No level found",
+    description: level.description || "no level",
+    thumbnail_url: level.thumbnail_url || level.thumbnail || "",
+    creator: creatorProfile?.data?.display_name || creatorProfile?.data?.username || level.creator || level.creator_username || "No creator found",
+    creator_username: creatorProfile?.data?.username || level.creator_username || level.username || "no username",
+    creator_user_id: creatorProfile?.data?.user_id || level.creator_user_id || level.user_id || "?",
+    creator_uid: creatorProfile?.id || creatorUid || "",
+    hearts: Number(level.hearts || 0),
+    likes: Number(level.likes || 0),
+    followers: Number(level.followers || 0),
+    plays: Number(level.plays || 0),
+    created_at: level.created_at || level.createdAt || null
+  };
+}
+
+app.get("/api/levels", async (req, res) => {
+  try {
+    const levels = await readCollection("levels");
+    levels.sort((a, b) =>
+      (b.created_at?.toMillis?.() || 0) -
+      (a.created_at?.toMillis?.() || 0)
+    );
+    res.json({ levels });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to read levels.");
+  }
+});
+
 app.get("/api/levels/:id", async (req, res) => {
   try {
-    const level = await findLevelByIdentifier(req.params.id);
-
-    if (!level) {
-      return res.status(404).json({
-        found: false,
-        id: String(req.params.id),
-        name: "No level found",
-        description: "no level",
-        creator: "No creator found",
-        creator_username: "no username",
-        creator_user_id: "?",
-        hearts: 0,
-        likes: 0,
-        followers: 0,
-        plays: 0
-      });
-    }
-
-    const data = level;
-    res.json({
-      found: true,
-      id: level.id,
-      name: data.name || data.title || "No level found",
-      title: data.title || data.name || "No level found",
-      description: data.description || "no level",
-      creator: data.creator || data.username || "No creator found",
-      creator_username: data.creator_username || data.username || data.creator || "no username",
-      creator_user_id: data.creator_user_id || data.user_id || "?",
-      uid: data.uid || data.creatorUid || "",
-      thumbnail_url: data.thumbnail_url || "",
-      hearts: data.hearts || 0,
-      likes: data.likes || 0,
-      followers: data.followers || 0,
-      plays: data.plays || 0,
-      created_at: data.created_at || data.createdAt || null
-    });
-  } catch (error) {
-    console.error("Level read error:", error);
-    res.status(500).json({ found: false, error: "Failed to load level" });
+    const level = await levelPayload(req.params.id);
+    if (!level) return res.status(404).json({ found: false, level: null });
+    res.json({ found: true, level });
+  } catch (e) {
+    console.error("Level:", e);
+    error(res, 500, "Failed to read level.");
   }
 });
 
 app.post("/api/levels", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
   try {
-    const name = String(req.body.name || "").trim();
-    const description =
-      String(req.body.description || "").trim();
+    const user = await requireUser(req, res);
+    if (!user) return;
 
-    if (!name) {
-      return res.status(400).json({
-        error: "Level name is required"
+    const name = clean(req.body.name);
+    if (!name) return error(res, 400, "Level name is required.");
+
+    const profile = await readDoc("profiles", user.uid);
+    if (!profile) return error(res, 404, "Your profile could not be found.");
+
+    const userId = await ensureUserId(user.uid, profile.data);
+
+    // READ EXISTING DATA FIRST
+    const existing = await levelsForProfile(user.uid, profile.data, userId);
+    const duplicate = existing.find(l => lower(l.name) === lower(name));
+
+    if (duplicate) {
+      return res.json({
+        success: true,
+        already_exists: true,
+        level: await levelPayload(duplicate.id)
       });
     }
 
-    if (name.length > 120) {
-      return res.status(400).json({
-        error: "Level name is too long"
-      });
-    }
+    const ref = db.collection("levels").doc();
 
-    const profile = await getProfileByUid(user.uid);
-
-    const username =
-      profile?.username ||
-      user.name ||
-      user.email ||
-      "Player";
-
-    const levelRef = db.collection("levels").doc();
-
-    await levelRef.set({
-      uid: user.uid,
-      creator_user_id: profile?.user_id || null,
+    // WRITE
+    await ref.set({
+      level_id: ref.id,
       name,
-      title: name,
-      creator: username,
-      creator_username: username,
-      username,
-      description,
-      thumbnail_url:
-        String(req.body.thumbnail_url || "").trim(),
+      description: "no level",
+      thumbnail_url: "",
+      uid: user.uid,
+      user_id: userId,
+      creator_uid: user.uid,
+      creator_user_id: userId,
+      username: profile.data.username || "No username",
+      creator_username: profile.data.username || "No username",
+      creator: profile.data.display_name || profile.data.username || "No creator found",
       hearts: 0,
       likes: 0,
       followers: 0,
@@ -1599,188 +764,201 @@ app.post("/api/levels", async (req, res) => {
       updated_at: FieldValue.serverTimestamp()
     });
 
-    res.status(201).json({
-      success: true,
-      id: levelRef.id
-    });
-  } catch (error) {
-    console.error("Level create error:", error);
+    // READ BACK
+    const saved = await levelPayload(ref.id);
+    if (!saved) return error(res, 500, "Level was written but could not be read back.");
 
-    res.status(500).json({
-      success: false,
-      error: "Failed to create level"
-    });
+    res.json({ success: true, level: saved });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to create level.");
   }
 });
 
-// ==================================================
-// GENERIC FIRESTORE API
-// ==================================================
+// ---------------- FOLLOW / FRIEND ----------------
+
+app.post("/api/profiles/:id/follow", async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+
+    const target = await findProfile(req.params.id);
+    if (!target) return error(res, 404, "Profile not found.");
+    if (target.id === user.uid) return error(res, 400, "You cannot follow yourself.");
+
+    const id = `${user.uid}_${target.id}`;
+    const ref = db.collection("follows").doc(id);
+
+    // READ FIRST
+    const before = await ref.get();
+
+    if (before.exists) {
+      await ref.delete();
+      const after = await ref.get();
+      return res.json({ success: true, following: after.exists });
+    }
+
+    // WRITE
+    await ref.set({
+      follower_uid: user.uid,
+      following_uid: target.id,
+      created_at: FieldValue.serverTimestamp()
+    });
+
+    // READ BACK
+    const after = await ref.get();
+    res.json({ success: true, following: after.exists });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to update follow.");
+  }
+});
+
+app.post("/api/profiles/:id/friend", async (req, res) => {
+  try {
+    const user = await requireUser(req, res);
+    if (!user) return;
+
+    const target = await findProfile(req.params.id);
+    if (!target) return error(res, 404, "Profile not found.");
+    if (target.id === user.uid) return error(res, 400, "You cannot friend yourself.");
+
+    const snapshot = await db.collection("friends")
+      .where("users", "array-contains", user.uid).get();
+
+    const existing = snapshot.docs.find(d =>
+      (d.data().users || []).includes(target.id)
+    );
+
+    if (existing) {
+      await existing.ref.delete();
+      const after = await existing.ref.get();
+      return res.json({ success: true, friends: after.exists });
+    }
+
+    const ref = db.collection("friends").doc(`${user.uid}_${target.id}`);
+
+    await ref.set({
+      users: [user.uid, target.id],
+      created_at: FieldValue.serverTimestamp()
+    });
+
+    const after = await ref.get();
+    res.json({ success: true, friends: after.exists });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to update friendship.");
+  }
+});
+
+// ---------------- GENERIC DATA ----------------
 
 app.get("/api/data/:collection/:id", async (req, res) => {
   try {
-    const snapshot = await db
-      .collection(req.params.collection)
-      .doc(req.params.id)
-      .get();
+    const result = await readDoc(req.params.collection, req.params.id);
+    if (!result) return res.status(404).json({ found: false });
 
-    if (!snapshot.exists) {
-      return res.status(404).json({
-        found: false
-      });
-    }
-
-    res.json({
-      found: true,
-      id: snapshot.id,
-      data: snapshot.data()
-    });
-  } catch (error) {
-    console.error("Firestore read error:", error);
-
-    res.status(500).json({
-      found: false,
-      error: "Failed to read Firestore"
-    });
+    res.json({ found: true, id: result.id, data: result.data });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to read Firebase.");
   }
 });
 
 app.post("/api/data/:collection/:id", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
   try {
-    const { collection, id } = req.params;
-
-    if (
-      !req.body ||
-      typeof req.body !== "object" ||
-      Array.isArray(req.body)
-    ) {
-      return res.status(400).json({
-        error: "JSON object required"
-      });
+    if (!req.body || typeof req.body !== "object") {
+      return error(res, 400, "JSON body required.");
     }
 
-    await db
-      .collection(collection)
-      .doc(id)
-      .set(
-        {
-          ...req.body,
-          updatedAt: FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
+    const ref = db.collection(req.params.collection).doc(req.params.id);
+
+    // READ
+    const before = await ref.get();
+
+    // WRITE
+    await ref.set({
+      ...req.body,
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // READ BACK
+    const after = await ref.get();
 
     res.json({
       success: true,
-      collection,
-      id
+      existed_before: before.exists,
+      found_after_write: after.exists,
+      collection: req.params.collection,
+      id: after.id,
+      data: after.data()
     });
-  } catch (error) {
-    console.error("Firestore write error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to write Firestore"
-    });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to write Firebase.");
   }
 });
 
 app.delete("/api/data/:collection/:id", async (req, res) => {
-  const user = await requireUser(req, res);
-
-  if (!user) return;
-
   try {
-    const { collection, id } = req.params;
+    const ref = db.collection(req.params.collection).doc(req.params.id);
+    const before = await ref.get();
 
-    await db
-      .collection(collection)
-      .doc(id)
-      .delete();
+    if (!before.exists) {
+      return res.status(404).json({
+        success: false,
+        deleted: false,
+        error: "Document not found."
+      });
+    }
+
+    await ref.delete();
+
+    const after = await ref.get();
 
     res.json({
       success: true,
-      deleted: true,
-      collection,
-      id
+      deleted: !after.exists,
+      collection: req.params.collection,
+      id: req.params.id
     });
-  } catch (error) {
-    console.error("Firestore delete error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: "Failed to delete Firestore document"
-    });
+  } catch (e) {
+    console.error(e);
+    error(res, 500, "Failed to delete Firebase document.");
   }
 });
 
-// ==================================================
-// PAGE ROUTES
-// ==================================================
-//
-// Support both lowercase and uppercase filenames/URLs.
-// This matters on Render/Linux because filenames are case-sensitive.
-//
+// ---------------- STATIC FILES ----------------
 
-const publicPath = path.join(__dirname);
+app.use(express.static(__dirname, { extensions: ["html"] }));
 
-app.use(express.static(publicPath));
+app.get(["/Level.html", "/level.html"], (req, res) =>
+  res.sendFile(path.join(__dirname, "level.html"))
+);
 
-app.get(["/level.html", "/Level.html"], (req, res) => {
-  res.sendFile(path.join(publicPath, "level.html"), error => {
-    if (error) {
-      res.sendFile(path.join(publicPath, "Level.html"));
-    }
-  });
-});
+app.get(["/Profile.html", "/profile.html"], (req, res) =>
+  res.sendFile(path.join(__dirname, "profile.html"))
+);
 
-app.get(["/profile.html", "/Profile.html"], (req, res) => {
-  res.sendFile(path.join(publicPath, "profile.html"), error => {
-    if (error) {
-      res.sendFile(path.join(publicPath, "Profile.html"));
-    }
-  });
-});
+app.get(["/Post.html", "/post.html"], (req, res) =>
+  res.sendFile(path.join(__dirname, "post.html"))
+);
 
-app.get(["/post.html", "/Post.html"], (req, res) => {
-  res.sendFile(path.join(publicPath, "post.html"), error => {
-    if (error) {
-      res.sendFile(path.join(publicPath, "Post.html"));
-    }
-  });
-});
+app.get("/", (req, res) =>
+  res.sendFile(path.join(__dirname, "index.html"))
+);
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(publicPath, "index.html"));
-});
+app.use((req, res) =>
+  res.status(404).json({ error: "Not Found" })
+);
 
-// ==================================================
-// 404
-// ==================================================
-
-app.use((req, res) => {
-  res.status(404).json({
-    error: "Not Found"
-  });
-});
-
-// ==================================================
-// START SERVER
-// ==================================================
-
-const PORT = process.env.PORT || 10000;
+const PORT = Number(process.env.PORT) || 10000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("========================================");
   console.log("LittleBigAdventure server started");
   console.log("Port: " + PORT);
-  console.log("Firebase Admin: connected");
-  console.log("Profiles: numeric ID + UID supported");
-  console.log("Posts: exact post ID supported");
-  console.log("Levels: exact level ID supported");
+  console.log("Firebase-first mode: ON");
+  console.log("READ -> VALIDATE -> WRITE -> READ BACK");
   console.log("========================================");
 });
