@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LittleBigAdventure - Post</title>
+<meta id="meta-description" name="description" content="no post">
+<link href="https://djpieces.neocities.org/css/home_page.css" rel="stylesheet" type="text/css">
+<link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="shortcut icon" type="image/x-icon">
+
+<style>
+.lba-post-box{padding:18px}
+.lba-post-text,.lba-reply-text{white-space:pre-wrap;word-break:break-word;line-height:1.5}
+.lba-reply{padding:13px;margin-bottom:10px}
+.lba-reply-author{font-weight:bold}
+.lba-date{font-size:11px;opacity:.7;margin:4px 0 8px}
+.lba-status{display:none;padding:8px;margin:8px 0}
+.lba-empty{padding:12px;opacity:.75}
+.lba-reply-form{margin-top:18px;padding:15px}
+.lba-reply-form textarea{width:100%;min-height:90px;box-sizing:border-box;resize:vertical;padding:8px;margin-bottom:8px}
+</style>
+</head>
+
+<body class="level activity en">
+
+<div id="topbar">
+  <div class="container_12">
+    <div class="grid_12">
+      <div class="grid_4 alpha">
+        <div id="switchbuttons">
+          <a class="lbpme" href="/" style="display:flex;align-items:center;gap:10px;position:relative;top:-6px;">
+            <img src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+                 alt="LittleBigAdventure"
+                 style="height:55px;width:auto;object-fit:contain;display:block;">
+            <span>Home</span>
+          </a>
+        </div>
+      </div>
+      <div class="grid_8 omega"><div id="mainmenu"></div></div>
+      <div class="clear">&nbsp;</div>
+    </div>
+  </div>
+</div>
+
+<div id="bgr">
+<div id="bg">
+<div class="clear divider">&nbsp;</div>
+
+<div class="section">
+<div class="container container_12">
+
+<div class="grid_12 popit paddv" id="header">
+  <div class="grid_3 alpha" id="avatar">
+    <span class="icon type versus"></span>
+    <img id="post-avatar" alt="Post author" height="150" width="150"
+         style="object-fit:cover;display:none;">
+  </div>
+
+  <div class="grid_9 omega" id="basicinfo">
+    <h1 id="post-title">No post found</h1>
+    <h2><em id="post-author">No username found</em></h2>
+    <div class="clear">&nbsp;</div>
+    <p id="post-date">no post</p>
+  </div>
+</div>
+
+<div class="clear divider">&nbsp;</div>
+
+<div class="grid_12">
+
+<div class="grid_3 alpha container" id="panelcolumn">
+  <ul id="submenu">
+    <li><a href="/">Home</a></li>
+    <li><a href="/post">All Posts</a></li>
+    <li><a href="/">Go back to Homepage</a></li>
+  </ul>
+
+  <div class="grid_3 panel popit">
+    <h4><a href="/">LittleBigAdventure</a><span class="icon">&nbsp;</span></h4>
+    <ul><li><p>Community posts and replies.</p></li></ul>
+  </div>
+</div>
+
+<div class="grid_9 omega popitinfo" id="contentcolumn">
+
+  <div class="panel popit lba-post-box">
+    <h3>Post</h3>
+    <div id="post-status" class="lba-status"></div>
+    <div id="post-text" class="lba-post-text">no post</div>
+  </div>
+
+  <div class="panel popit lba-post-box" style="margin-top:15px;">
+    <h3>Replies</h3>
+    <div id="replies-list">
+      <div class="lba-empty">No replies found.</div>
+    </div>
+
+    <div class="lba-reply-form">
+      <h4>Reply to this post</h4>
+      <div id="reply-status" class="lba-status"></div>
+      <textarea id="reply-text" maxlength="2000" placeholder="Write a reply..."></textarea>
+      <button class="button" id="reply-button" type="button">
+        <span class="text">Post Reply</span>
+      </button>
+    </div>
+  </div>
+
+</div>
+</div>
+</div>
+</div>
+
+<div class="clear divider">&nbsp;</div>
+<div class="footer">
+<div class="container container_12">
+<div class="grid_12">
+<div class="grid_6 alpha">
+<ul id="sitemap">
+<li><a href="/">Home</a></li>
+<li><a href="/post">All Posts</a></li>
+</ul>
+</div>
+<div class="grid_6 omega"></div>
+<div class="grid_12 alpha omega paddb"><small>LittleBigAdventure</small></div>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const DEFAULT_POST = {
+    found:false,
+    id:"?",
+    title:"No post found",
+    text:"no post",
+    author:"No username found",
+    author_username:"no username",
+    author_user_id:"?",
+    avatar_url:"",
+    created_at:null,
+    replies:[]
+  };
+
+  const params = new URLSearchParams(location.search);
+  const postId = params.get("id") || params.get("postId") || "";
+
+  function $(id){ return document.getElementById(id); }
+
+  function escapeHtml(value){
+    return String(value ?? "")
+      .replace(/&/g,"&amp;")
+      .replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;")
+      .replace(/'/g,"&#039;");
+  }
+
+  async function api(url, options={}){
+    const response = await fetch(url,{
+      credentials:"same-origin",
+      headers:{
+        "Content-Type":"application/json",
+        ...(options.headers || {})
+      },
+      ...options
+    });
+
+    let data={};
+    try { data=await response.json(); } catch(e){}
+
+    if(!response.ok){
+      const error=new Error(data.error || "Request failed");
+      error.status=response.status;
+      error.data=data;
+      throw error;
+    }
+
+    return data;
+  }
+
+  function formatDate(value){
+    if(!value) return "no date";
+    try{
+      if(typeof value==="object" && value._seconds){
+        return new Date(value._seconds*1000).toLocaleString();
+      }
+      const date=new Date(value);
+      if(!Number.isNaN(date.getTime())) return date.toLocaleString();
+    }catch(e){}
+    return "no date";
+  }
+
+  function renderPost(post){
+    const data={...DEFAULT_POST,...post};
+
+    $("post-title").textContent=data.title;
+    $("post-author").textContent=data.author;
+    $("post-date").textContent=data.found ? formatDate(data.created_at) : "no post";
+    $("post-text").textContent=data.text;
+
+    document.title=data.found
+      ? "LittleBigAdventure - " + data.title
+      : "LittleBigAdventure - No post found";
+
+    $("meta-description").content=data.text || "no post";
+
+    const avatar=$("post-avatar");
+    if(data.avatar_url){
+      avatar.src=data.avatar_url;
+      avatar.style.display="block";
+    }else{
+      avatar.removeAttribute("src");
+      avatar.style.display="none";
+    }
+
+    renderReplies(data.replies || []);
+  }
+
+  function renderReplies(replies){
+    const box=$("replies-list");
+
+    if(!Array.isArray(replies) || replies.length===0){
+      box.innerHTML='<div class="lba-empty">No replies found.</div>';
+      return;
+    }
+
+    box.innerHTML=replies.map(reply=>{
+      const author=reply.author || reply.username || "No username found";
+      const text=reply.text || reply.message || "no reply";
+      const date=formatDate(reply.created_at);
+
+      return `
+        <div class="panel popit lba-reply">
+          <div class="lba-reply-author">${escapeHtml(author)}</div>
+          <div class="lba-date">${escapeHtml(date)}</div>
+          <div class="lba-reply-text">${escapeHtml(text)}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function loadPost(){
+    renderPost(DEFAULT_POST);
+
+    if(!postId) return;
+
+    try{
+      const result=await api("/api/posts/"+encodeURIComponent(postId));
+
+      if(!result || result.found===false || !result.post){
+        renderPost(DEFAULT_POST);
+        return;
+      }
+
+      renderPost({
+        found:true,
+        ...result.post
+      });
+    }catch(error){
+      console.warn("Post load failed:",error);
+
+      // Firebase generic fallback.
+      try{
+        const fallback=await api("/api/data/posts/"+encodeURIComponent(postId));
+
+        if(!fallback || fallback.found===false || !fallback.data){
+          renderPost(DEFAULT_POST);
+          return;
+        }
+
+        renderPost({
+          found:true,
+          id:postId,
+          ...fallback.data,
+          replies:[]
+        });
+      }catch(e){
+        renderPost(DEFAULT_POST);
+      }
+    }
+  }
+
+  async function submitReply(){
+    const text=$("reply-text").value.trim();
+    const status=$("reply-status");
+
+    status.style.display="none";
+
+    if(!postId){
+      status.textContent="No post was selected.";
+      status.style.display="block";
+      return;
+    }
+
+    if(!text){
+      status.textContent="Write something before posting your reply.";
+      status.style.display="block";
+      return;
+    }
+
+    try{
+      $("reply-button").disabled=true;
+
+      const result=await api(
+        "/api/posts/"+encodeURIComponent(postId)+"/replies",
+        {
+          method:"POST",
+          body:JSON.stringify({text})
+        }
+      );
+
+      $("reply-text").value="";
+      status.textContent="Reply posted!";
+      status.style.display="block";
+
+      if(result && result.post){
+        renderPost({found:true,...result.post});
+      }else{
+        await loadPost();
+      }
+    }catch(error){
+      status.textContent=
+        error.status===401
+          ? "Please log in before replying."
+          : (error.data && error.data.error) || "Could not post reply.";
+
+      status.style.display="block";
+    }finally{
+      $("reply-button").disabled=false;
+    }
+  }
+
+  $("reply-button").addEventListener("click",submitReply);
+
+  document.addEventListener("DOMContentLoaded",loadPost);
+})();
+</script>
+
+</body>
+</html>
