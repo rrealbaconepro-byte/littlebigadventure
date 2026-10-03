@@ -662,7 +662,7 @@ app.get("/api/players", async (req, res) => {
 async function profileRoute(req, res) {
   try {
     const identifier = req.params.id;
-    const profile = await getProfileByIdentifier(identifier);
+    let profile = await getProfileByIdentifier(identifier);
 
     if (!profile) {
       return res.status(404).json({
@@ -671,108 +671,231 @@ async function profileRoute(req, res) {
       });
     }
 
-    const userId =
-      profile.user_id ||
-      null;
+    // Give older accounts a permanent numeric ID automatically.
+    if (!profile.user_id) {
+      try {
+        const allProfiles = await db
+          .collection("profiles")
+          .orderBy("created_at", "asc")
+          .get();
 
-    let profilePosts = [];
+        const index = allProfiles.docs.findIndex(doc => doc.id === profile.id);
+        if (index >= 0) {
+          const generatedId = index + 1;
+          await db.collection("profiles").doc(profile.id).set({
+            user_id: generatedId,
+            updated_at: FieldValue.serverTimestamp()
+          }, { merge: true });
+          profile.user_id = generatedId;
+        }
+      } catch (migrationError) {
+        console.warn("Could not assign legacy User ID:", migrationError.message);
+      }
+    }
+
+    const userId = Number.isInteger(Number(profile.user_id))
+      ? Number(profile.user_id)
+      : null;
+
+    const profilePosts = [];
+    const seenPostIds = new Set();
 
     if (userId !== null) {
-      const profilePostsSnapshot = await db
-        .collection("profile_posts")
-        .where("profile_user_id", "==", Number(userId))
+      const snap = await db.collection("profile_posts")
+        .where("profile_user_id", "==", userId)
         .get();
-
-      profilePosts = profilePostsSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      snap.docs.forEach(doc => {
+        seenPostIds.add(doc.id);
+        profilePosts.push({ id: doc.id, ...doc.data() });
+      });
     }
 
-    // Also support profile posts saved with uid instead of numeric ID.
-    if (profilePosts.length === 0) {
-      const byUidSnapshot = await db
-        .collection("profile_posts")
-        .where("profile_uid", "==", profile.uid || profile.id)
+    const profileUid = profile.uid || profile.id;
+    if (profileUid) {
+      const snap = await db.collection("profile_posts")
+        .where("profile_uid", "==", profileUid)
         .get();
-
-      profilePosts = byUidSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      snap.docs.forEach(doc => {
+        if (!seenPostIds.has(doc.id)) {
+          seenPostIds.add(doc.id);
+          profilePosts.push({ id: doc.id, ...doc.data() });
+        }
+      });
     }
 
-    let levelsSnapshot;
+    const levels = [];
+    const seenLevelIds = new Set();
 
     if (userId !== null) {
-      levelsSnapshot = await db
-        .collection("levels")
-        .where(
-          "creator_user_id",
-          "==",
-          Number(userId)
-        )
+      const byNumber = await db.collection("levels")
+        .where("creator_user_id", "==", userId)
         .get();
-    } else {
-      levelsSnapshot = await db
-        .collection("levels")
-        .where(
-          "uid",
-          "==",
-          profile.uid || profile.id
-        )
+      byNumber.docs.forEach(doc => {
+        seenLevelIds.add(doc.id);
+        levels.push({ id: doc.id, ...doc.data() });
+      });
+
+      const oldNumber = await db.collection("levels")
+        .where("user_id", "==", userId)
         .get();
+      oldNumber.docs.forEach(doc => {
+        if (!seenLevelIds.has(doc.id)) {
+          seenLevelIds.add(doc.id);
+          levels.push({ id: doc.id, ...doc.data() });
+        }
+      });
     }
 
-    // Compatibility for older levels that only have uid.
-    if (levelsSnapshot.empty && (profile.uid || profile.id)) {
-      levelsSnapshot = await db
-        .collection("levels")
-        .where(
-          "uid",
-          "==",
-          profile.uid || profile.id
-        )
+    if (profileUid) {
+      const byUid = await db.collection("levels")
+        .where("uid", "==", profileUid)
         .get();
+      byUid.docs.forEach(doc => {
+        if (!seenLevelIds.has(doc.id)) {
+          seenLevelIds.add(doc.id);
+          levels.push({ id: doc.id, ...doc.data() });
+        }
+      });
+    }
+
+    const followerSnap = userId === null ? { size: 0 } : await db.collection("follows")
+      .where("following_user_id", "==", userId)
+      .get();
+    const followingSnap = userId === null ? { size: 0 } : await db.collection("follows")
+      .where("follower_user_id", "==", userId)
+      .get();
+    const friendSnap = userId === null ? { size: 0 } : await db.collection("friends")
+      .where("user_ids", "array-contains", userId)
+      .get();
+
+    const current = await getCurrentUser(req);
+    let currentProfile = current ? await getProfileByUid(current.uid) : null;
+    const currentUserId = currentProfile?.user_id || null;
+
+    let isFollowing = false;
+    let isFriend = false;
+
+    if (currentUserId && userId !== null) {
+      isFollowing = followerSnap.docs.some(doc => {
+        const data = doc.data();
+        return Number(data.follower_user_id) === Number(currentUserId);
+      });
+
+      isFriend = friendSnap.docs.some(doc => {
+        const ids = doc.data().user_ids || [];
+        return ids.map(Number).includes(Number(currentUserId));
+      });
     }
 
     res.json({
       found: true,
-
       profile: {
         id: profile.id,
-        uid: profile.uid || profile.id,
+        uid: profileUid,
         user_id: userId,
         username: profile.username || "",
-        display_name:
-          profile.display_name ||
-          profile.username ||
-          "",
+        display_name: profile.display_name || profile.username || "",
         bio: profile.bio || "",
         avatar_url: profile.avatar_url || "",
         email: profile.email || "",
-        created_at: profile.created_at || null
+        created_at: profile.created_at || null,
+        followers: followerSnap.size || 0,
+        following: followingSnap.size || 0,
+        friends: friendSnap.size || 0,
+        games: levels.length,
+        posts: profilePosts.length,
+        is_owner: !!current && current.uid === profileUid,
+        is_following: isFollowing,
+        is_friend: isFriend
       },
-
       posts: profilePosts,
-
-      levels: levelsSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }))
+      levels
     });
   } catch (error) {
     console.error("Profile read error:", error);
-
-    res.status(500).json({
-      found: false,
-      error: "Failed to load profile"
-    });
+    res.status(500).json({ found: false, error: "Failed to load profile" });
   }
 }
 
 app.get("/api/profile/:id", profileRoute);
 app.get("/api/profiles/:id", profileRoute);
+
+// Compatibility routes used by Profile.html.
+app.get("/api/profile/:id/levels", async (req, res) => {
+  try {
+    const profile = await getProfileByIdentifier(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Player not found", levels: [] });
+
+    const uid = profile.uid || profile.id;
+    const userId = Number(profile.user_id);
+    const results = [];
+    const seen = new Set();
+
+    if (Number.isInteger(userId) && userId > 0) {
+      for (const field of ["creator_user_id", "user_id"]) {
+        const snap = await db.collection("levels").where(field, "==", userId).get();
+        snap.docs.forEach(doc => {
+          if (!seen.has(doc.id)) {
+            seen.add(doc.id);
+            results.push({ id: doc.id, ...doc.data() });
+          }
+        });
+      }
+    }
+
+    if (uid) {
+      const snap = await db.collection("levels").where("uid", "==", uid).get();
+      snap.docs.forEach(doc => {
+        if (!seen.has(doc.id)) {
+          seen.add(doc.id);
+          results.push({ id: doc.id, ...doc.data() });
+        }
+      });
+    }
+
+    res.json({ levels: results });
+  } catch (error) {
+    console.error("Profile levels error:", error);
+    res.status(500).json({ error: "Failed to load profile levels", levels: [] });
+  }
+});
+
+app.get("/api/profile/:id/posts", async (req, res) => {
+  try {
+    const profile = await getProfileByIdentifier(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Player not found", posts: [] });
+
+    const results = [];
+    const seen = new Set();
+    const uid = profile.uid || profile.id;
+    const userId = Number(profile.user_id);
+
+    if (Number.isInteger(userId) && userId > 0) {
+      const snap = await db.collection("profile_posts")
+        .where("profile_user_id", "==", userId).get();
+      snap.docs.forEach(doc => {
+        seen.add(doc.id);
+        results.push({ id: doc.id, ...doc.data() });
+      });
+    }
+
+    if (uid) {
+      const snap = await db.collection("profile_posts")
+        .where("profile_uid", "==", uid).get();
+      snap.docs.forEach(doc => {
+        if (!seen.has(doc.id)) {
+          seen.add(doc.id);
+          results.push({ id: doc.id, ...doc.data() });
+        }
+      });
+    }
+
+    res.json({ posts: results });
+  } catch (error) {
+    console.error("Profile posts error:", error);
+    res.status(500).json({ error: "Failed to load profile posts", posts: [] });
+  }
+});
 
 // ==================================================
 // PROFILE UPDATE
@@ -824,6 +947,129 @@ app.post("/api/profile/update", async (req, res) => {
       success: false,
       error: "Failed to update profile"
     });
+  }
+});
+
+// ==================================================
+// PROFILE POSTS / SOCIAL ACTIONS
+// ==================================================
+
+app.post("/api/profile/:id/posts", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const target = await getProfileByIdentifier(req.params.id);
+    if (!target) return res.status(404).json({ error: "Player not found" });
+
+    const text = String(req.body.text || "").trim();
+    if (!text) return res.status(400).json({ error: "Post text is required" });
+    if (text.length > 2000) return res.status(400).json({ error: "Post is too long" });
+
+    const author = await getProfileByUid(user.uid);
+    const ref = db.collection("profile_posts").doc();
+    await ref.set({
+      profile_user_id: Number(target.user_id) || null,
+      profile_uid: target.uid || target.id,
+      uid: user.uid,
+      user_id: author?.user_id || null,
+      author: author?.display_name || author?.username || user.name || "Player",
+      username: author?.username || user.name || "Player",
+      text,
+      created_at: FieldValue.serverTimestamp()
+    });
+
+    res.status(201).json({ success: true, id: ref.id });
+  } catch (error) {
+    console.error("Profile post create error:", error);
+    res.status(500).json({ success: false, error: "Failed to post on profile" });
+  }
+});
+
+app.patch("/api/profile/me", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const updates = { updated_at: FieldValue.serverTimestamp() };
+    if (req.body.display_name !== undefined) {
+      updates.display_name = String(req.body.display_name).trim().slice(0, 40);
+    }
+    if (req.body.bio !== undefined) {
+      updates.bio = String(req.body.bio).trim().slice(0, 500);
+    }
+    if (req.body.avatar_url !== undefined) {
+      updates.avatar_url = String(req.body.avatar_url).trim().slice(0, 1000);
+    }
+
+    await db.collection("profiles").doc(user.uid).set(updates, { merge: true });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Profile update error:", error);
+    res.status(500).json({ success: false, error: "Failed to update profile" });
+  }
+});
+
+app.post("/api/profile/:id/follow", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const target = await getProfileByIdentifier(req.params.id);
+    const me = await getProfileByUid(user.uid);
+    if (!target || !me) return res.status(404).json({ error: "Player not found" });
+    if (Number(target.user_id) === Number(me.user_id)) return res.status(400).json({ error: "You cannot follow yourself" });
+
+    const q = await db.collection("follows")
+      .where("follower_user_id", "==", Number(me.user_id))
+      .where("following_user_id", "==", Number(target.user_id))
+      .limit(1).get();
+
+    if (!q.empty) {
+      await q.docs[0].ref.delete();
+      return res.json({ success: true, following: false });
+    }
+
+    await db.collection("follows").add({
+      follower_user_id: Number(me.user_id),
+      following_user_id: Number(target.user_id),
+      created_at: FieldValue.serverTimestamp()
+    });
+    res.json({ success: true, following: true });
+  } catch (error) {
+    console.error("Follow error:", error);
+    res.status(500).json({ success: false, error: "Failed to update follow" });
+  }
+});
+
+app.post("/api/profile/:id/friend", async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  try {
+    const target = await getProfileByIdentifier(req.params.id);
+    const me = await getProfileByUid(user.uid);
+    if (!target || !me) return res.status(404).json({ error: "Player not found" });
+    if (Number(target.user_id) === Number(me.user_id)) return res.status(400).json({ error: "You cannot friend yourself" });
+
+    const ids = [Number(me.user_id), Number(target.user_id)].sort((a,b) => a-b);
+    const q = await db.collection("friends")
+      .where("user_ids", "==", ids)
+      .limit(1).get();
+
+    if (!q.empty) {
+      await q.docs[0].ref.delete();
+      return res.json({ success: true, friend: false });
+    }
+
+    await db.collection("friends").add({
+      user_ids: ids,
+      created_at: FieldValue.serverTimestamp()
+    });
+    res.json({ success: true, friend: true });
+  } catch (error) {
+    console.error("Friend error:", error);
+    res.status(500).json({ success: false, error: "Failed to update friendship" });
   }
 });
 
@@ -887,15 +1133,35 @@ app.get("/api/posts/:id", async (req, res) => {
 
     const data = snapshot.data();
 
-    const repliesSnapshot = await db
-      .collection("post_replies")
-      .where("post_id", "==", postId)
-      .get();
+    const replies = [];
+    const seenReplyIds = new Set();
 
-    const replies = repliesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    const replyQueries = [
+      db.collection("post_replies").where("post_id", "==", postId).get(),
+      db.collection("replies").where("post_id", "==", postId).get()
+    ];
+
+    if (/^\d+$/.test(postId)) {
+      const numericId = Number(postId);
+      replyQueries.push(db.collection("post_replies").where("post_id", "==", numericId).get());
+      replyQueries.push(db.collection("replies").where("post_id", "==", numericId).get());
+    }
+
+    const replySnapshots = await Promise.all(replyQueries);
+    replySnapshots.forEach(snapshot => {
+      snapshot.docs.forEach(doc => {
+        if (!seenReplyIds.has(doc.id)) {
+          seenReplyIds.add(doc.id);
+          replies.push({ id: doc.id, ...doc.data() });
+        }
+      });
+    });
+
+    replies.sort((a, b) => {
+      const ta = a.created_at?._seconds ? a.created_at._seconds : Date.parse(a.created_at || 0) / 1000;
+      const tb = b.created_at?._seconds ? b.created_at._seconds : Date.parse(b.created_at || 0) / 1000;
+      return ta - tb;
+    });
 
     res.json({
       found: true,
@@ -1063,9 +1329,21 @@ app.post("/api/posts/:id/replies", async (req, res) => {
       created_at: FieldValue.serverTimestamp()
     });
 
+    // Return the new reply immediately so Post.html can render it without waiting.
     res.status(201).json({
       success: true,
-      id: replyRef.id
+      id: replyRef.id,
+      reply: {
+        id: replyRef.id,
+        post_id: postId,
+        uid: user.uid,
+        user_id: profile?.user_id || null,
+        author: profile?.display_name || profile?.username || user.name || "Player",
+        username: profile?.username || user.name || "Player",
+        avatar_url: profile?.avatar_url || "",
+        text,
+        created_at: new Date().toISOString()
+      }
     });
   } catch (error) {
     console.error("Reply create error:", error);
@@ -1147,19 +1425,51 @@ app.get("/api/levels", async (req, res) => {
   }
 });
 
+async function findLevelByIdentifier(identifier) {
+  const value = String(identifier || "").trim();
+  if (!value) return null;
+
+  let snap = await db.collection("levels").doc(value).get();
+  if (snap.exists) return { id: snap.id, ...snap.data() };
+
+  for (const field of ["level_id", "id"]) {
+    try {
+      const q = await db.collection("levels").where(field, "==", value).limit(1).get();
+      if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+    } catch (_) {}
+  }
+
+  if (/^\d+$/.test(value)) {
+    const numeric = Number(value);
+    for (const field of ["level_id", "id"]) {
+      try {
+        const q = await db.collection("levels").where(field, "==", numeric).limit(1).get();
+        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+      } catch (_) {}
+    }
+
+    // Older levels may use random Firestore document IDs.
+    // Numeric URLs still resolve by creation order: /level.html?id=1, id=2, etc.
+    try {
+      const ordered = await db.collection("levels").orderBy("created_at", "asc").get();
+      if (numeric >= 1 && numeric <= ordered.size) {
+        const doc = ordered.docs[numeric - 1];
+        return { id: doc.id, ...doc.data() };
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
 app.get("/api/levels/:id", async (req, res) => {
   try {
-    const levelId = String(req.params.id);
+    const level = await findLevelByIdentifier(req.params.id);
 
-    const snapshot = await db
-      .collection("levels")
-      .doc(levelId)
-      .get();
-
-    if (!snapshot.exists) {
+    if (!level) {
       return res.status(404).json({
         found: false,
-        id: levelId,
+        id: String(req.params.id),
         name: "No level found",
         description: "no level",
         creator: "No creator found",
@@ -1172,62 +1482,27 @@ app.get("/api/levels/:id", async (req, res) => {
       });
     }
 
-    const data = snapshot.data();
-
+    const data = level;
     res.json({
       found: true,
-      id: snapshot.id,
-      name:
-        data.name ||
-        data.title ||
-        "No level found",
-      title:
-        data.title ||
-        data.name ||
-        "No level found",
-      description:
-        data.description ||
-        "no level",
-      creator:
-        data.creator ||
-        data.username ||
-        "No creator found",
-      creator_username:
-        data.creator_username ||
-        data.username ||
-        data.creator ||
-        "no username",
-      creator_user_id:
-        data.creator_user_id ||
-        data.user_id ||
-        "?",
-      uid:
-        data.uid ||
-        data.creatorUid ||
-        "",
-      thumbnail_url:
-        data.thumbnail_url ||
-        "",
-      hearts:
-        data.hearts || 0,
-      likes:
-        data.likes || 0,
-      followers:
-        data.followers || 0,
-      plays:
-        data.plays || 0,
-      created_at:
-        data.created_at ||
-        data.createdAt ||
-        null
+      id: level.id,
+      name: data.name || data.title || "No level found",
+      title: data.title || data.name || "No level found",
+      description: data.description || "no level",
+      creator: data.creator || data.username || "No creator found",
+      creator_username: data.creator_username || data.username || data.creator || "no username",
+      creator_user_id: data.creator_user_id || data.user_id || "?",
+      uid: data.uid || data.creatorUid || "",
+      thumbnail_url: data.thumbnail_url || "",
+      hearts: data.hearts || 0,
+      likes: data.likes || 0,
+      followers: data.followers || 0,
+      plays: data.plays || 0,
+      created_at: data.created_at || data.createdAt || null
     });
   } catch (error) {
     console.error("Level read error:", error);
-
-    res.status(500).json({
-      found: false,
-      error: "Failed to load level"
-    });
+    res.status(500).json({ found: false, error: "Failed to load level" });
   }
 });
 
