@@ -49,6 +49,15 @@ const auth = getAuth();
 const app = express();
 
 app.use(express.json({ limit: "1mb" }));
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+  }
+  next();
+});
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
@@ -853,6 +862,22 @@ app.get("/api/profile/:id/levels", async (req, res) => {
       });
     }
 
+    // Legacy levels sometimes stored the creator as a username instead of UID.
+    const usernames = [profile.username, profile.display_name].filter(Boolean);
+    for (const field of ["creator", "creator_username", "username"]) {
+      for (const username of usernames) {
+        try {
+          const snap = await db.collection("levels").where(field, "==", username).get();
+          snap.docs.forEach(doc => {
+            if (!seen.has(doc.id)) {
+              seen.add(doc.id);
+              results.push({ id: doc.id, ...doc.data() });
+            }
+          });
+        } catch (_) {}
+      }
+    }
+
     res.json({ levels: results });
   } catch (error) {
     console.error("Profile levels error:", error);
@@ -1111,45 +1136,73 @@ app.get("/api/posts", async (req, res) => {
   }
 });
 
-app.get("/api/posts/:id", async (req, res) => {
+async function findPostByIdentifier(identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return null;
+
+  let snap = await db.collection('posts').doc(value).get();
+  if (snap.exists) return { id: snap.id, ...snap.data() };
+
+  for (const field of ['post_id', 'id']) {
+    try {
+      let q = await db.collection('posts').where(field, '==', value).limit(1).get();
+      if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+      if (/^\d+$/.test(value)) {
+        q = await db.collection('posts').where(field, '==', Number(value)).limit(1).get();
+        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+      }
+    } catch (_) {}
+  }
+
+  if (/^\d+$/.test(value)) {
+    const n = Number(value);
+    try {
+      const ordered = await db.collection('posts').orderBy('created_at', 'asc').get();
+      if (n >= 1 && n <= ordered.size) {
+        const doc = ordered.docs[n - 1];
+        return { id: doc.id, ...doc.data() };
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+app.get('/api/posts/:id', async (req, res) => {
   try {
-    const postId = String(req.params.id);
+    const requestedId = String(req.params.id);
+    const post = await findPostByIdentifier(requestedId);
 
-    const snapshot = await db
-      .collection("posts")
-      .doc(postId)
-      .get();
-
-    if (!snapshot.exists) {
+    if (!post) {
       return res.status(404).json({
         found: false,
-        id: postId,
-        title: "No post found",
-        author: "No username found",
-        text: "no post",
+        id: requestedId,
+        title: 'No post found',
+        author: 'No username found',
+        text: 'no post',
         replies: []
       });
     }
 
-    const data = snapshot.data();
-
+    const postId = String(post.id);
+    const data = post;
     const replies = [];
     const seenReplyIds = new Set();
 
     const replyQueries = [
-      db.collection("post_replies").where("post_id", "==", postId).get(),
-      db.collection("replies").where("post_id", "==", postId).get()
+      db.collection('post_replies').where('post_id', '==', postId).get(),
+      db.collection('replies').where('post_id', '==', postId).get()
     ];
 
     if (/^\d+$/.test(postId)) {
       const numericId = Number(postId);
-      replyQueries.push(db.collection("post_replies").where("post_id", "==", numericId).get());
-      replyQueries.push(db.collection("replies").where("post_id", "==", numericId).get());
+      replyQueries.push(db.collection('post_replies').where('post_id', '==', numericId).get());
+      replyQueries.push(db.collection('replies').where('post_id', '==', numericId).get());
     }
 
     const replySnapshots = await Promise.all(replyQueries);
-    replySnapshots.forEach(snapshot => {
-      snapshot.docs.forEach(doc => {
+    replySnapshots.forEach(replySnapshot => {
+      replySnapshot.docs.forEach(doc => {
         if (!seenReplyIds.has(doc.id)) {
           seenReplyIds.add(doc.id);
           replies.push({ id: doc.id, ...doc.data() });
@@ -1158,57 +1211,33 @@ app.get("/api/posts/:id", async (req, res) => {
     });
 
     replies.sort((a, b) => {
-      const ta = a.created_at?._seconds ? a.created_at._seconds : Date.parse(a.created_at || 0) / 1000;
-      const tb = b.created_at?._seconds ? b.created_at._seconds : Date.parse(b.created_at || 0) / 1000;
-      return ta - tb;
+      const getTime = item => {
+        if (item?.created_at?._seconds) return item.created_at._seconds;
+        if (item?.createdAt?._seconds) return item.createdAt._seconds;
+        const parsed = Date.parse(item?.created_at || item?.createdAt || 0);
+        return Number.isFinite(parsed) ? parsed / 1000 : 0;
+      };
+      return getTime(a) - getTime(b);
     });
 
     res.json({
       found: true,
-
       post: {
-        id: snapshot.id,
-        title:
-          data.title ||
-          data.text?.slice(0, 80) ||
-          "Post",
-        author:
-          data.author ||
-          data.username ||
-          "No username found",
-        author_username:
-          data.username ||
-          data.author ||
-          "no username",
-        author_user_id:
-          data.user_id ||
-          null,
-        uid:
-          data.uid ||
-          data.authorUid ||
-          "",
-        avatar_url:
-          data.avatar_url ||
-          "",
-        text:
-          data.text ||
-          data.message ||
-          "no post",
-        created_at:
-          data.created_at ||
-          data.createdAt ||
-          null
+        id: post.id,
+        title: data.title || data.text?.slice(0, 80) || 'Post',
+        author: data.author || data.username || 'No username found',
+        author_username: data.username || data.author || 'no username',
+        author_user_id: data.user_id || data.author_user_id || null,
+        uid: data.uid || data.authorUid || '',
+        avatar_url: data.avatar_url || '',
+        text: data.text || data.message || 'no post',
+        created_at: data.created_at || data.createdAt || null
       },
-
       replies
     });
   } catch (error) {
-    console.error("Post read error:", error);
-
-    res.status(500).json({
-      found: false,
-      error: "Failed to load post"
-    });
+    console.error('Post read error:', error);
+    res.status(500).json({ found: false, error: 'Failed to load post' });
   }
 });
 
@@ -1278,16 +1307,15 @@ app.post("/api/posts/:id/replies", async (req, res) => {
   try {
     const postId = String(req.params.id);
 
-    const postSnapshot = await db
-      .collection("posts")
-      .doc(postId)
-      .get();
+    const postRecord = await findPostByIdentifier(postId);
 
-    if (!postSnapshot.exists) {
+    if (!postRecord) {
       return res.status(404).json({
         error: "Post not found"
       });
     }
+
+    const actualPostId = String(postRecord.id);
 
     const text = String(req.body.text || "").trim();
 
@@ -1310,7 +1338,7 @@ app.post("/api/posts/:id/replies", async (req, res) => {
       .doc();
 
     await replyRef.set({
-      post_id: postId,
+      post_id: actualPostId,
       uid: user.uid,
       user_id: profile?.user_id || null,
       author:
@@ -1426,37 +1454,51 @@ app.get("/api/levels", async (req, res) => {
 });
 
 async function findLevelByIdentifier(identifier) {
-  const value = String(identifier || "").trim();
+  const value = String(identifier || '').trim();
   if (!value) return null;
 
-  let snap = await db.collection("levels").doc(value).get();
+  // 1. Exact Firestore document ID.
+  let snap = await db.collection('levels').doc(value).get();
   if (snap.exists) return { id: snap.id, ...snap.data() };
 
-  for (const field of ["level_id", "id"]) {
+  // 2. Stored ID fields, supporting both strings and numbers.
+  const fields = ['level_id', 'id', 'levelId', 'levelID'];
+  for (const field of fields) {
     try {
-      const q = await db.collection("levels").where(field, "==", value).limit(1).get();
+      let q = await db.collection('levels').where(field, '==', value).limit(1).get();
       if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+
+      if (/^\d+$/.test(value)) {
+        q = await db.collection('levels').where(field, '==', Number(value)).limit(1).get();
+        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+      }
     } catch (_) {}
   }
 
+  // 3. Numeric level URLs can represent creation order.
   if (/^\d+$/.test(value)) {
     const numeric = Number(value);
-    for (const field of ["level_id", "id"]) {
-      try {
-        const q = await db.collection("levels").where(field, "==", numeric).limit(1).get();
-        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
-      } catch (_) {}
-    }
-
-    // Older levels may use random Firestore document IDs.
-    // Numeric URLs still resolve by creation order: /level.html?id=1, id=2, etc.
     try {
-      const ordered = await db.collection("levels").orderBy("created_at", "asc").get();
+      const ordered = await db.collection('levels').orderBy('created_at', 'asc').get();
       if (numeric >= 1 && numeric <= ordered.size) {
         const doc = ordered.docs[numeric - 1];
         return { id: doc.id, ...doc.data() };
       }
-    } catch (_) {}
+    } catch (_) {
+      // Some legacy documents may not have created_at.
+      try {
+        const fallback = await db.collection('levels').get();
+        const docs = fallback.docs.slice().sort((a, b) => {
+          const av = a.data().created_at?._seconds || 0;
+          const bv = b.data().created_at?._seconds || 0;
+          return av - bv;
+        });
+        if (numeric >= 1 && numeric <= docs.length) {
+          const doc = docs[numeric - 1];
+          return { id: doc.id, ...doc.data() };
+        }
+      } catch (_) {}
+    }
   }
 
   return null;
