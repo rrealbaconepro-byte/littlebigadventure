@@ -19,12 +19,12 @@
 <link href="http://lbp.me/v/29z13k" rel="canonical_url" />
 
 <meta content="index,follow,archive" name="robots" />
-<meta content="The Epic NUKE Survival!(hard but fun!)" name="title" />
+<meta content="Loading Level..." name="title" id="meta-title" />
 <meta content="" name="keywords" />
-<meta content="A Well Made Nuke Survival, With Lots Of Nukes by matteocanova1998 heart my lv" name="description" />
-<meta content="A Well Made Nuke Survival, With Lots Of Nukes by matteocanova1998 heart my lv" property="description" />
-<meta content="The Epic NUKE Survival!(hard but fun!)" property="og:title" />
-<meta content="https://web.archive.org/web/20110816232815im_/http://i5.lbp.me/img/bs/b256346e26a03470fd978f8d06103a5b169cc1e9.png" property="og:image" />
+<meta content="Loading level..." name="description" id="meta-description" />
+<meta content="Loading level..." property="description" id="meta-og-description" />
+<meta content="Loading Level..." property="og:title" id="meta-og-title" />
+<meta content="" property="og:image" id="meta-og-image" />
 
 <!-- LBP-DOT-ME-STYLEE -->
 <link href="https://djpieces.neocities.org/css/home_page.css" media="all" rel="stylesheet" type="text/css" />
@@ -240,9 +240,10 @@
               <span class="icon lbp2" title="Published in LittleBigPlanet?2"></span>
 
               <img
-                alt=""
+                id="level-thumbnail"
+                alt="Level thumbnail"
                 height="150"
-                src="https://djpieces.neocities.org/images/icons/posts/Full/Testing_123.png"
+                src=""
                 width="150"
               />
 
@@ -251,6 +252,20 @@
             <div class="grid_9 omega" id="basicinfo">
 
               <div class="loggedin controls basicinfo">
+                <div id="level-actions" style="margin-bottom:10px;">
+                  <button class="button" id="heart-button" type="button">
+                    <span class="icon"></span>
+                    <span class="text">♡ Heart <strong id="heart-count">0</strong></span>
+                  </button>
+                  <button class="button" id="like-button" type="button">
+                    <span class="icon"></span>
+                    <span class="text">♥ Like <strong id="like-count">0</strong></span>
+                  </button>
+                  <button class="button" id="follow-button" type="button">
+                    <span class="icon"></span>
+                    <span class="text">Follow <strong id="follower-count">0</strong></span>
+                  </button>
+                </div>
 
                 <div class="shadow">
 
@@ -296,17 +311,13 @@
 
               </div>
 
-              <h1>
-                Loading Name...
-              </h1>
+              <h1 id="level-name">No level found</h1>
 
-              <h2>
-                <em></em>
-              </h2>
+              <h2><em id="level-creator">No creator found</em></h2>
 
               <div class="clear">&nbsp;</div>
 
-              <p>Desc...</p>
+              <p id="level-description">no level</p>
 
             </div>
           </div>
@@ -328,7 +339,7 @@
                 </li>
 
                 <li id="sm-photos">
-                  <a href="/add_site">Add me to your site!</a>
+                  <a href="/">Go back to Homepage</a>
                 </li>
 
               </ul>
@@ -368,8 +379,17 @@
 
             <div class="grid_9 omega popitinfo" id="contentcolumn">
 
-              <p> Loading level...
-              </p>
+              <div id="level-content">Loading level...</div>
+              <div id="level-stats" class="panel popit" style="margin-top:12px; padding:12px;">
+                <h4>Level Info</h4>
+                <p><strong>Made by:</strong> <span id="info-creator">No creator found</span></p>
+                <p><strong>User ID:</strong> <span id="info-user-id">?</span></p>
+                <p><strong>Hearts:</strong> <span id="info-hearts">0</span></p>
+                <p><strong>Likes:</strong> <span id="info-likes">0</span></p>
+                <p><strong>Followers:</strong> <span id="info-followers">0</span></p>
+                <p><strong>Plays:</strong> <span id="info-plays">0</span></p>
+              </div>
+
 
             </div>
 
@@ -438,6 +458,266 @@
     new Image().src =
       "https://script.google.com/macros/s/AKfycbx7bqLK5GfWpFOukGGeg_PGBDY4oXkaqhcTmIIpJI21D73OTVDuSDiNaDdQ6CkxY4C7Xw/exec?page=post1&action=increment";
   </script>
+
+
+<script>
+(function () {
+  "use strict";
+
+  /*
+   * LittleBigAdventure level page
+   *
+   * IMPORTANT:
+   * Firebase Admin credentials NEVER belong in this file.
+   * This page talks to your Render server API, and the Render server
+   * talks to Firestore using Firebase Admin.
+   *
+   * Supported URLs:
+   *   /level.html?id=1
+   *   /level.html?levelId=1
+   *   /level.html?id=abc123
+   */
+
+  const DEFAULT_LEVEL = {
+    found: false,
+    id: "?",
+    name: "No level found",
+    description: "no level",
+    thumbnail_url: "",
+    creator: "No creator found",
+    creator_username: "no username",
+    creator_user_id: "?",
+    hearts: 0,
+    likes: 0,
+    followers: 0,
+    plays: 0,
+    hearted: false,
+    liked: false,
+    following: false
+  };
+
+  const params = new URLSearchParams(window.location.search);
+  const levelId = params.get("id") || params.get("levelId") || "";
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  async function api(url, options = {}) {
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      ...options
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch (_) {}
+
+    if (!response.ok) {
+      const error = new Error(data.error || "Request failed");
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+
+    return data;
+  }
+
+  function setText(id, value) {
+    const element = $(id);
+    if (element) element.textContent = value;
+  }
+
+  function setCount(id, value) {
+    setText(id, Number(value || 0).toLocaleString());
+  }
+
+  function renderLevel(level) {
+    const data = { ...DEFAULT_LEVEL, ...level };
+
+    setText("level-name", data.name);
+    setText("level-creator", data.creator || "No creator found");
+    setText("level-description", data.description || "no level");
+
+    setText("info-creator", data.creator || "No creator found");
+    setText("info-user-id", data.creator_user_id ?? "?");
+
+    setCount("heart-count", data.hearts);
+    setCount("like-count", data.likes);
+    setCount("follower-count", data.followers);
+
+    setCount("info-hearts", data.hearts);
+    setCount("info-likes", data.likes);
+    setCount("info-followers", data.followers);
+    setCount("info-plays", data.plays);
+
+    const thumbnail = $("level-thumbnail");
+    if (thumbnail) {
+      if (data.thumbnail_url) {
+        thumbnail.src = data.thumbnail_url;
+        thumbnail.style.display = "block";
+      } else {
+        thumbnail.removeAttribute("src");
+        thumbnail.style.display = "none";
+      }
+    }
+
+    const metaTitle = $("meta-title");
+    const metaDescription = $("meta-description");
+    const metaOgDescription = $("meta-og-description");
+    const metaOgTitle = $("meta-og-title");
+    const metaOgImage = $("meta-og-image");
+
+    document.title = data.found ? data.name : "LittleBigAdventure - No level found";
+    if (metaTitle) metaTitle.content = data.name;
+    if (metaDescription) metaDescription.content = data.description || "no level";
+    if (metaOgDescription) metaOgDescription.content = data.description || "no level";
+    if (metaOgTitle) metaOgTitle.content = data.name;
+    if (metaOgImage) metaOgImage.content = data.thumbnail_url || "";
+
+    const heartButton = $("heart-button");
+    const likeButton = $("like-button");
+    const followButton = $("follow-button");
+
+    if (heartButton) {
+      heartButton.dataset.active = data.hearted ? "true" : "false";
+      heartButton.querySelector(".text").innerHTML =
+        (data.hearted ? "♥ Unheart " : "♡ Heart ") +
+        "<strong id=\"heart-count\">" + Number(data.hearts || 0).toLocaleString() + "</strong>";
+    }
+
+    if (likeButton) {
+      likeButton.dataset.active = data.liked ? "true" : "false";
+      likeButton.querySelector(".text").innerHTML =
+        (data.liked ? "♥ Unlike " : "♥ Like ") +
+        "<strong id=\"like-count\">" + Number(data.likes || 0).toLocaleString() + "</strong>";
+    }
+
+    if (followButton) {
+      followButton.dataset.active = data.following ? "true" : "false";
+      followButton.querySelector(".text").innerHTML =
+        (data.following ? "Following " : "Follow ") +
+        "<strong id=\"follower-count\">" + Number(data.followers || 0).toLocaleString() + "</strong>";
+    }
+
+    const content = $("level-content");
+    if (content) {
+      if (!data.found) {
+        content.innerHTML =
+          '<h3>No level found</h3>' +
+          '<p>This level does not exist, was removed, or has not loaded yet.</p>';
+      } else {
+        content.innerHTML =
+          '<h3>About this level</h3>' +
+          '<p>' + escapeHtml(data.description || "No description.") + '</p>' +
+          '<p><strong>Created by:</strong> ' +
+          escapeHtml(data.creator || "No creator found") +
+          '</p>';
+      }
+    }
+  }
+
+  async function loadLevel() {
+    // Always show the safe default first, so the page never appears broken.
+    renderLevel(DEFAULT_LEVEL);
+
+    if (!levelId) {
+      return;
+    }
+
+    try {
+      // Preferred route used by the LBA Firebase server.
+      const data = await api("/api/levels/" + encodeURIComponent(levelId));
+
+      if (!data || data.found === false || !data.level) {
+        renderLevel(DEFAULT_LEVEL);
+        return;
+      }
+
+      renderLevel({
+        found: true,
+        ...data.level
+      });
+    } catch (error) {
+      console.warn("Level load failed:", error);
+
+      // Optional fallback for servers that return the level directly.
+      try {
+        const fallback = await api(
+          "/api/data/levels/" + encodeURIComponent(levelId)
+        );
+
+        if (!fallback || fallback.found === false || !fallback.data) {
+          renderLevel(DEFAULT_LEVEL);
+          return;
+        }
+
+        renderLevel({
+          found: true,
+          id: levelId,
+          ...fallback.data
+        });
+      } catch (_) {
+        renderLevel(DEFAULT_LEVEL);
+      }
+    }
+  }
+
+  async function toggleLevelAction(action) {
+    if (!levelId || levelId === "?") return;
+
+    try {
+      const result = await api(
+        "/api/levels/" + encodeURIComponent(levelId) + "/" + action,
+        { method: "POST", body: "{}" }
+      );
+
+      if (result && result.level) {
+        renderLevel({
+          found: true,
+          ...result.level
+        });
+      } else {
+        await loadLevel();
+      }
+    } catch (error) {
+      if (error.status === 401) {
+        alert("Please log in to do that.");
+      } else {
+        console.warn("Level action failed:", error);
+      }
+    }
+  }
+
+  $("heart-button")?.addEventListener("click", function () {
+    toggleLevelAction("heart");
+  });
+
+  $("like-button")?.addEventListener("click", function () {
+    toggleLevelAction("like");
+  });
+
+  $("follow-button")?.addEventListener("click", function () {
+    toggleLevelAction("follow");
+  });
+
+  document.addEventListener("DOMContentLoaded", loadLevel);
+})();
+</script>
 
 </body>
 </html>
