@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta content="LittleBigAdventure" property="og:site_name">
+  <meta content="profile" property="og:type">
+  <meta content="LittleBigAdventure player profile" name="description">
+  <title>LittleBigAdventure Profile</title>
+  <link href="https://djpieces.neocities.org/css/home_page.css" media="all" rel="stylesheet" type="text/css">
+  <link href="https://i.postimg.cc/T39sbnqS/Chat-GPT-Image-Sep-30-2026-at-06-00-12-PM.png" rel="shortcut icon" type="image/x-icon">
+</head>
+<body>
+  <div id="makebelieve"><span class="hide">&nbsp;</span></div>
+  <div id="topbar">
+    <div class="container_12">
+      <div class="grid_12">
+        <div class="grid_4 alpha">
+          <div id="switchbuttons">
+            <a class="Home" href="/" style="display:flex;align-items:center;gap:10px;position:relative;top:-8px;">
+              <img src="https://i.postimg.cc/0QZHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+                   alt="LittleBigAdventure" style="height:55px;width:auto;object-fit:contain;">
+            </a>
+          </div>
+        </div>
+        <div class="grid_8 omega">
+          <div id="mainmenu">
+            <ul class="loggedout" id="accountmenu" style="display:flex;align-items:center;gap:10px;">
+              <li><span class="psntitle"><span class="logopsn" title="Digital Network"></span>DigitalNetwork</span></li>
+              <li><a href="#" onclick="openAccountModal('signup');return false;">Sign Up</a></li>
+              <li><a href="#" onclick="openAccountModal('login');return false;">Login</a></li>
+            </ul>
+          </div>
+        </div>
+        <div class="clear">&nbsp;</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="bgr">
+    <div id="bg">
+      <div class="clear divider">&nbsp;</div>
+      <div class="section">
+        <div class="container container_12">
+
+          <div class="grid_12" style="margin-bottom:14px;">
+            <div class="popit panel paddv" style="padding:18px;">
+              <h2 id="profileName">No username found</h2>
+              <p id="profileDesc" style="margin:5px 0 10px;">no username</p>
+              <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                <strong>User ID: <span id="profileUserId">?</span></strong>
+                <span>|</span>
+                <span>Levels: <strong id="profileLevelCount">0</strong></span>
+                <span>|</span>
+                <span>Posts: <strong id="profilePostCount">0</strong></span>
+              </div>
+              <div id="profileActions" style="margin-top:12px;"></div>
+              <p id="profileMessage" style="margin-top:8px;"></p>
+            </div>
+          </div>
+
+          <div class="grid_4 alpha popit paddv panel">
+            <h4>Profile</h4>
+            <div style="padding:10px 12px;">
+              <p><strong>Name</strong><br><span id="profileDisplayName">No username found</span></p>
+              <p><strong>Username</strong><br><span id="profileUsername">no username</span></p>
+              <p><strong>User ID</strong><br><span id="profileIdSide">?</span></p>
+              <p><strong>Bio</strong><br><span id="profileBio">no username</span></p>
+            </div>
+          </div>
+
+          <div class="grid_4 popit paddv panel">
+            <h4>Levels</h4>
+            <div id="profileLevels" style="padding:10px 12px;text-align:left;">
+              <p>No levels found.</p>
+            </div>
+          </div>
+
+          <div class="grid_4 omega popit paddv panel">
+            <h4>Posts</h4>
+            <div id="profilePosts" style="padding:10px 12px;text-align:left;">
+              <p>No posts found.</p>
+            </div>
+          </div>
+
+          <div class="clear divider">&nbsp;</div>
+
+          <div class="grid_12 popit panel paddv">
+            <h4>People</h4>
+            <div style="padding:10px 12px;">
+              <div id="followersInfo">Followers: 0</div>
+              <div id="followingInfo">Following: 0</div>
+              <div id="friendsInfo">Friends: 0</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="clear divider">&nbsp;</div>
+      <div class="footer">
+        <div class="container container_12">
+          <div class="grid_12">
+            <div class="grid_12 alpha omega paddb">
+              <small>Hi ik ben cool hehe</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const DEFAULT_PROFILE = {
+  user_id: "?",
+  username: "no username",
+  display_name: "No username found",
+  bio: "no username",
+  levels: [],
+  posts: [],
+  followers: 0,
+  following: 0,
+  friends: 0,
+  found: false
+};
+
+async function api(url, options) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options && options.headers ? options.headers : {})
+    },
+    ...(options || {})
+  });
+
+  let data = {};
+  try { data = await response.json(); } catch (e) {}
+
+  if (!response.ok) {
+    throw new Error(data.error || "Something went wrong.");
+  }
+  return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getRequestedUserId() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("id") || params.get("userId") || "";
+}
+
+function renderProfile(profile) {
+  const p = { ...DEFAULT_PROFILE, ...profile };
+
+  document.getElementById("profileName").textContent =
+    p.display_name || DEFAULT_PROFILE.display_name;
+  document.getElementById("profileDesc").textContent =
+    p.bio || DEFAULT_PROFILE.bio;
+  document.getElementById("profileUserId").textContent = p.user_id ?? "?";
+  document.getElementById("profileDisplayName").textContent =
+    p.display_name || DEFAULT_PROFILE.display_name;
+  document.getElementById("profileUsername").textContent =
+    p.username || DEFAULT_PROFILE.username;
+  document.getElementById("profileIdSide").textContent = p.user_id ?? "?";
+  document.getElementById("profileBio").textContent =
+    p.bio || DEFAULT_PROFILE.bio;
+
+  const levels = Array.isArray(p.levels) ? p.levels : [];
+  const posts = Array.isArray(p.posts) ? p.posts : [];
+
+  document.getElementById("profileLevelCount").textContent = levels.length;
+  document.getElementById("profilePostCount").textContent = posts.length;
+
+  document.getElementById("profileLevels").innerHTML = levels.length
+    ? levels.map(level =>
+        '<div style="padding:8px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
+        "<strong>" + escapeHtml(level.name || "Unnamed Level") + "</strong>" +
+        (level.description ? "<br><small>" + escapeHtml(level.description) + "</small>" : "") +
+        "</div>"
+      ).join("")
+    : "<p>No levels found.</p>";
+
+  document.getElementById("profilePosts").innerHTML = posts.length
+    ? posts.map(post =>
+        '<div style="padding:8px 4px;border-bottom:1px solid rgba(0,0,0,.12);">' +
+        "<strong>" + escapeHtml(post.author || p.username || "no username") + "</strong>" +
+        "<p style=\"margin:4px 0 0 0;\">" + escapeHtml(post.text || "") + "</p>" +
+        "</div>"
+      ).join("")
+    : "<p>No posts found.</p>";
+
+  document.getElementById("followersInfo").textContent =
+    "Followers: " + Number(p.followers || 0);
+  document.getElementById("followingInfo").textContent =
+    "Following: " + Number(p.following || 0);
+  document.getElementById("friendsInfo").textContent =
+    "Friends: " + Number(p.friends || 0);
+
+  const actions = document.getElementById("profileActions");
+  actions.innerHTML = "";
+
+  if (p.found && p.user_id !== "?" && p.user_id !== null) {
+    actions.innerHTML =
+      '<a class="button" href="#" onclick="toggleFollow();return false;">Follow</a> ' +
+      '<a class="button" href="#" onclick="toggleFriend();return false;">Friend</a>';
+  }
+}
+
+async function loadProfile() {
+  renderProfile(DEFAULT_PROFILE);
+
+  const requestedId = getRequestedUserId();
+
+  try {
+    const data = requestedId
+      ? await api("/api/profile/" + encodeURIComponent(requestedId))
+      : await api("/api/profile/me");
+
+    if (!data || data.found === false || !data.profile) {
+      renderProfile(DEFAULT_PROFILE);
+      return;
+    }
+
+    renderProfile({
+      ...data.profile,
+      levels: data.levels || [],
+      posts: data.posts || [],
+      followers: data.followers || 0,
+      following: data.following || 0,
+      friends: data.friends || 0,
+      found: true
+    });
+  } catch (error) {
+    renderProfile(DEFAULT_PROFILE);
+  }
+}
+
+async function updateAccountMenu() {
+  const menu = document.getElementById("accountmenu");
+
+  try {
+    const data = await api("/api/auth/me");
+
+    if (!data.authenticated) return;
+
+    const user = data.user || {};
+    const id = user.profile_user_id || user.user_id || "";
+
+    menu.innerHTML =
+      '<li><span class="psntitle"><span class="logopsn"></span>DigitalNetwork</span></li>' +
+      '<li><a href="/profile?id=' + encodeURIComponent(id) + '">' +
+      escapeHtml(user.username || "no username") + "</a></li>" +
+      '<li><a href="#" onclick="logoutAccount();return false;">Logout</a></li>';
+  } catch (e) {}
+}
+
+async function logoutAccount() {
+  try {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+  } catch (e) {}
+  location.reload();
+}
+
+async function toggleFollow() {
+  const id = getRequestedUserId();
+  if (!id) return;
+
+  try {
+    const result = await api("/api/profile/" + encodeURIComponent(id) + "/follow", {
+      method: "POST",
+      body: "{}"
+    });
+
+    document.getElementById("profileMessage").textContent =
+      result.following ? "Following player." : "Unfollowed player.";
+
+    await loadProfile();
+  } catch (e) {
+    document.getElementById("profileMessage").textContent = e.message;
+  }
+}
+
+async function toggleFriend() {
+  const id = getRequestedUserId();
+  if (!id) return;
+
+  try {
+    const result = await api("/api/profile/" + encodeURIComponent(id) + "/friend", {
+      method: "POST",
+      body: "{}"
+    });
+
+    document.getElementById("profileMessage").textContent =
+      result.friends ? "Player added as a friend." : "Friend removed.";
+
+    await loadProfile();
+  } catch (e) {
+    document.getElementById("profileMessage").textContent = e.message;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+  loadProfile();
+  updateAccountMenu();
+});
+</script>
+
+<link href="/css/flood.css" rel="stylesheet" type="text/css" media="all">
+<script src="/scripts/flood.js"></script>
+</body>
+</html>
