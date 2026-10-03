@@ -705,9 +705,13 @@
           return;
         }
 
+        const profileId = account.user_id || account.id || account.uid || '';
+
         menu.innerHTML =
           '<li><span class="psntitle">DigitalNetwork</span></li>' +
-          '<li><a href="/profile">' + escapeHtml(account.username) + '</a></li>' +
+          '<li><a href="/profile.html?id=' + encodeURIComponent(profileId) + '">' +
+            escapeHtml(account.username) +
+          '</a></li>' +
           '<li><a href="#" onclick="logoutAccount(); return false;">Logout</a></li>';
       }
 
@@ -720,11 +724,15 @@
             container.innerHTML = '<p>No players yet.</p>';
             return;
           }
-          container.innerHTML = players.map(player =>
-            '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-              '<strong>' + escapeHtml(player.display_name || player.username) + '</strong>' +
-            '</div>'
-          ).join('');
+          container.innerHTML = players.map(player => {
+            const userId = player.user_id || player.id || player.uid || '';
+
+            return '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
+              '<a href="/profile.html?id=' + encodeURIComponent(userId) + '" style="text-decoration:none;">' +
+                '<strong>' + escapeHtml(player.display_name || player.username || 'No username found') + '</strong>' +
+              '</a>' +
+            '</div>';
+          }).join('');
         } catch (error) {
           container.innerHTML = '<p>Players are unavailable.</p>';
         }
@@ -739,12 +747,26 @@
             container.innerHTML = '<p>No posts yet.</p>';
             return;
           }
-          container.innerHTML = posts.map(post =>
-            '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-              '<strong>' + escapeHtml(post.author) + '</strong>' +
-              '<p style="margin:4px 0 0 0;">' + escapeHtml(post.text) + '</p>' +
-            '</div>'
-          ).join('');
+          container.innerHTML = posts.map(post => {
+            const postId = post.id || post.post_id || '';
+
+            const authorId =
+              post.user_id ||
+              post.author_user_id ||
+              post.uid ||
+              '';
+
+            return '<div style="padding:8px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
+              '<a href="/post.html?id=' + encodeURIComponent(postId) + '" style="text-decoration:none;">' +
+                '<strong>' + escapeHtml(post.author || 'No username found') + '</strong>' +
+              '</a>' +
+              '<p style="margin:4px 0 0 0;">' +
+                '<a href="/post.html?id=' + encodeURIComponent(postId) + '" style="text-decoration:none;">' +
+                  escapeHtml(post.text || 'no post') +
+                '</a>' +
+              '</p>' +
+            '</div>';
+          }).join('');
         } catch (error) {
           container.innerHTML = '<p>Posts are unavailable.</p>';
         }
@@ -824,12 +846,29 @@
           }
           empty.style.display = 'none';
           list.style.display = 'block';
-          list.innerHTML = levels.map(level =>
-            '<div style="padding:9px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
-              '<strong>' + escapeHtml(level.name) + '</strong>' +
-              '<br><small>by ' + escapeHtml(level.creator || 'Unknown Player') + '</small>' +
-            '</div>'
-          ).join('');
+          list.innerHTML = levels.map(level => {
+            const levelId = level.id || level.level_id || '';
+
+            const creatorId =
+              level.creator_user_id ||
+              level.user_id ||
+              level.uid ||
+              '';
+
+            return '<div style="padding:9px 4px; border-bottom:1px solid rgba(0,0,0,.12);">' +
+              '<a href="/level.html?id=' + encodeURIComponent(levelId) + '" style="text-decoration:none;">' +
+                '<strong>' + escapeHtml(level.name || 'No level found') + '</strong>' +
+              '</a>' +
+              '<br>' +
+              '<small>by ' +
+                (creatorId
+                  ? '<a href="/profile.html?id=' + encodeURIComponent(creatorId) + '" style="text-decoration:none;">' +
+                      escapeHtml(level.creator || 'Unknown Player') +
+                    '</a>'
+                  : escapeHtml(level.creator || 'Unknown Player')) +
+              '</small>' +
+            '</div>';
+          }).join('');
         } catch (error) {
           empty.style.display = 'none';
           list.style.display = 'block';
