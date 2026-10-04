@@ -1178,6 +1178,8 @@ app.post(
 
       res.json({
         success: true,
+        authenticated: true,
+        loggedIn: true,
         user: publicProfile(
           found.data,
           found.data.user_id
@@ -1213,6 +1215,7 @@ app.get(
 
     if (!firebaseReady) {
       return res.status(503).json({
+        authenticated: false,
         loggedIn: false,
         firebase: false
       });
@@ -1223,6 +1226,7 @@ app.get(
 
     if (!user) {
       return res.status(401).json({
+        authenticated: false,
         loggedIn: false
       });
     }
@@ -1230,20 +1234,27 @@ app.get(
     const profile =
       await findProfile(user.uid);
 
+    const publicUser = profile
+      ? publicProfile(
+          profile.data,
+          profile.data.user_id
+        )
+      : {
+          uid: user.uid,
+          username:
+            user.name ||
+            user.email ||
+            "Unknown User",
+          display_name:
+            user.name ||
+            user.email ||
+            "Unknown User"
+        };
+
     res.json({
+      authenticated: true,
       loggedIn: true,
-      user: profile
-        ? publicProfile(
-            profile.data,
-            profile.data.user_id
-          )
-        : {
-            uid: user.uid,
-            username:
-              user.name ||
-              user.email ||
-              "Unknown User"
-          }
+      user: publicUser
     });
   }
 );
