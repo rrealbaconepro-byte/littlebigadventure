@@ -1022,7 +1022,6 @@ async function findProfile(identifier) {
 
 app.get(
   "/api/control/status",
-  controlGuard,
   async (req, res) => {
     res.set("Cache-Control", "no-store");
 
@@ -1059,7 +1058,6 @@ app.get(
 
 app.post(
   "/api/control/server/stop",
-  controlGuard,
   (req, res) => {
     serverOffline = true;
 
@@ -1079,7 +1077,6 @@ app.post(
 
 app.post(
   "/api/control/server/start",
-  controlGuard,
   (req, res) => {
     serverOffline = false;
 
@@ -1103,7 +1100,6 @@ app.post(
 
 app.post(
   "/api/control/firebase/stop",
-  controlGuard,
   (req, res) => {
     firebaseManuallyDisabled = true;
     firebaseReady = false;
@@ -1123,7 +1119,6 @@ app.post(
 
 app.post(
   "/api/control/firebase/start",
-  controlGuard,
   async (req, res) => {
     firebaseManuallyDisabled = false;
 
@@ -1161,7 +1156,6 @@ app.post(
 
 app.post(
   "/api/control/maintenance/on",
-  controlGuard,
   (req, res) => {
     maintenanceMode = true;
 
@@ -1179,7 +1173,6 @@ app.post(
 
 app.post(
   "/api/control/maintenance/off",
-  controlGuard,
   (req, res) => {
     maintenanceMode = false;
 
