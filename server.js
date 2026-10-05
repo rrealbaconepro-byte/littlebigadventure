@@ -27,6 +27,8 @@ const {
 
 const app = express();
 
+app.set("trust proxy", 1);
+
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -59,6 +61,58 @@ const FIREBASE_WATCHDOG_MS = Math.max(
 
 const SESSION_COOKIE = "lba_session";
 const SERVICE_NAME = "LittleBigAdventure";
+
+// ============================================================
+// CONTROL / SERVICE STATE
+// ============================================================
+//
+// Render remains AWAKE in all of these states.
+//
+// SERVER OFFLINE:
+//   - normal site requests have their sockets closed
+//   - control.html + control API remain available
+//
+// FIREBASE OFFLINE:
+//   - Firebase reads/writes are refused
+//   - Render + website server remain online
+//
+// MAINTENANCE:
+//   - normal visitors are redirected to the external
+//     maintenance page
+//
+// IMPORTANT:
+// Render cannot normally see a private LAN address such as
+// 192.168.178.69. It sees the public address of the network.
+// Therefore CONTROL_ALLOWED_IPS should contain the public IP
+// of the administrator network when deployed on Render.
+//
+// You can set:
+//   CONTROL_ALLOWED_IPS=your.public.ip,192.168.178.69
+//
+// 192.168.178.69 is kept as the requested local fallback,
+// but it will only match when the request actually contains
+// that address (for example on a local/private deployment).
+// ============================================================
+
+const CONTROL_ALLOWED_IPS = String(
+  process.env.CONTROL_ALLOWED_IPS ||
+  "192.168.178.69"
+)
+  .split(",")
+  .map(value => value.trim())
+  .filter(Boolean);
+
+const CONTROL_SECRET =
+  process.env.LBA_CONTROL_SECRET || "";
+
+const MAINTENANCE_URL =
+  "https://serviceunavailable.neocities.org/Maintenance";
+
+let serverOffline = false;
+let firebaseManuallyDisabled = false;
+let maintenanceMode = false;
+
+
 
 // ============================================================
 // FIREBASE STATE
@@ -286,6 +340,11 @@ async function firebaseRetry(label, operation) {
 // ============================================================
 
 async function checkFirebase(label = "health check") {
+  if (firebaseManuallyDisabled) {
+    firebaseReady = false;
+    return false;
+  }
+
   if (firebaseChecking) {
     return firebaseReady;
   }
@@ -361,6 +420,10 @@ async function startupFirebaseTest() {
 
 function startFirebaseWatchdog() {
   setInterval(async () => {
+    if (firebaseManuallyDisabled) {
+      return;
+    }
+
     if (firebaseReady) {
       // A light check keeps the health state current.
       await checkFirebase("watchdog");
@@ -388,6 +451,118 @@ function startFirebaseWatchdog() {
 }
 
 // ============================================================
+// CONTROL ACCESS / REQUEST HELPERS
+// ============================================================
+
+function getClientIp(req) {
+  // Render/reverse proxies normally provide x-forwarded-for.
+  // The last trusted proxy address is not used here; the first
+  // forwarded value is the original client address in the normal
+  // Render proxy setup.
+  const forwarded = req.headers["x-forwarded-for"];
+
+  let ip =
+    forwarded
+      ? String(forwarded).split(",")[0].trim()
+      : req.socket.remoteAddress || "";
+
+  if (ip.startsWith("::ffff:")) {
+    ip = ip.slice(7);
+  }
+
+  if (ip === "::1") {
+    ip = "127.0.0.1";
+  }
+
+  return ip;
+}
+
+function isAllowedControlIp(req) {
+  const ip = getClientIp(req);
+  return CONTROL_ALLOWED_IPS.includes(ip);
+}
+
+function hasControlSecret(req) {
+  if (!CONTROL_SECRET) {
+    return false;
+  }
+
+  const supplied =
+    req.headers["x-lba-control-secret"] ||
+    req.query?.control_secret ||
+    "";
+
+  return String(supplied) === CONTROL_SECRET;
+}
+
+function isControlRequest(req) {
+  const pathName = req.path || "";
+
+  return (
+    pathName === "/control.html" ||
+    pathName === "/Control.html" ||
+    pathName.startsWith("/api/control/")
+  );
+}
+
+function isAuthorizedControl(req) {
+  // IP allowlist is the primary gate.
+  // A secret is also accepted for deployments where Render cannot
+  // observe the private LAN IP.
+  return (
+    isAllowedControlIp(req) ||
+    hasControlSecret(req)
+  );
+}
+
+function rejectOfflineConnection(req, res) {
+  // Closing the socket instead of returning HTTP 503 is what makes
+  // browsers behave like the server cannot be reached.
+  try {
+    req.socket.destroy();
+  } catch (_) {}
+
+  // In case the socket cannot be destroyed immediately.
+  if (!res.headersSent) {
+    try {
+      res.status(503).end();
+    } catch (_) {}
+  }
+}
+
+function controlGuard(req, res, next) {
+  if (!isAuthorizedControl(req)) {
+    return res.status(403).json({
+      success: false,
+      error: "Control access denied"
+    });
+  }
+
+  next();
+}
+
+// This middleware is intentionally before the website/static routes.
+// Control requests remain reachable while the LBA server is OFFLINE.
+app.use((req, res, next) => {
+  if (serverOffline && !isControlRequest(req)) {
+    if (!isAuthorizedControl(req)) {
+      return rejectOfflineConnection(req, res);
+    }
+  }
+
+  // Maintenance mode redirects normal visitors but leaves the
+  // administrator control panel reachable.
+  if (
+    maintenanceMode &&
+    !isControlRequest(req)
+  ) {
+    return res.redirect(307, MAINTENANCE_URL);
+  }
+
+  next();
+});
+
+// ============================================================
 // FIREBASE AVAILABILITY MIDDLEWARE
 // ============================================================
 //
@@ -398,6 +573,16 @@ function startFirebaseWatchdog() {
 // ============================================================
 
 async function requireFirebase(req, res, next) {
+  if (firebaseManuallyDisabled) {
+    return res.status(503).json({
+      success: false,
+      firebase: false,
+      firebase_manually_disabled: true,
+      error: "Firebase has been disabled by the administrator",
+      retrying: false
+    });
+  }
+
   if (firebaseReady) {
     return next();
   }
@@ -832,6 +1017,184 @@ async function findProfile(identifier) {
 }
 
 // ============================================================
+// CONTROL STATUS
+// ============================================================
+
+app.get(
+  "/api/control/status",
+  controlGuard,
+  async (req, res) => {
+    res.set("Cache-Control", "no-store");
+
+    res.json({
+      success: true,
+      server: {
+        online: !serverOffline,
+        offline: serverOffline
+      },
+      render: {
+        awake: true
+      },
+      firebase: {
+        online:
+          !firebaseManuallyDisabled &&
+          firebaseReady,
+        manually_disabled:
+          firebaseManuallyDisabled
+      },
+      maintenance: {
+        enabled: maintenanceMode,
+        url: MAINTENANCE_URL
+      },
+      control: {
+        client_ip: getClientIp(req)
+      }
+    });
+  }
+);
+
+// ============================================================
+// CONTROL: SERVER OFFLINE / ONLINE
+// ============================================================
+
+app.post(
+  "/api/control/server/stop",
+  controlGuard,
+  (req, res) => {
+    serverOffline = true;
+
+    log(
+      `CONTROL: LBA server OFFLINE by ${getClientIp(req)}`
+    );
+
+    res.json({
+      success: true,
+      server_online: false,
+      render_awake: true,
+      message:
+        "LBA server is offline. Render remains awake."
+    });
+  }
+);
+
+app.post(
+  "/api/control/server/start",
+  controlGuard,
+  (req, res) => {
+    serverOffline = false;
+
+    log(
+      `CONTROL: LBA server ONLINE by ${getClientIp(req)}`
+    );
+
+    res.json({
+      success: true,
+      server_online: true,
+      render_awake: true,
+      message:
+        "LBA server is online again."
+    });
+  }
+);
+
+// ============================================================
+// CONTROL: FIREBASE OFFLINE / ONLINE
+// ============================================================
+
+app.post(
+  "/api/control/firebase/stop",
+  controlGuard,
+  (req, res) => {
+    firebaseManuallyDisabled = true;
+    firebaseReady = false;
+
+    firebaseLog(
+      `CONTROL: Firebase manually disabled by ${getClientIp(req)}`
+    );
+
+    res.json({
+      success: true,
+      firebase_online: false,
+      manually_disabled: true,
+      server_online: !serverOffline
+    });
+  }
+);
+
+app.post(
+  "/api/control/firebase/start",
+  controlGuard,
+  async (req, res) => {
+    firebaseManuallyDisabled = false;
+
+    const connected =
+      await checkFirebase(
+        "manual Firebase restart"
+      );
+
+    firebaseLog(
+      `CONTROL: Firebase restart requested by ${getClientIp(req)}`
+    );
+
+    if (!connected) {
+      return res.status(503).json({
+        success: false,
+        firebase_online: false,
+        manually_disabled: false,
+        retrying: true,
+        error:
+          "Firebase did not reconnect yet"
+      });
+    }
+
+    res.json({
+      success: true,
+      firebase_online: true,
+      manually_disabled: false
+    });
+  }
+);
+
+// ============================================================
+// CONTROL: MAINTENANCE
+// ============================================================
+
+app.post(
+  "/api/control/maintenance/on",
+  controlGuard,
+  (req, res) => {
+    maintenanceMode = true;
+
+    log(
+      `CONTROL: Maintenance ON by ${getClientIp(req)}`
+    );
+
+    res.json({
+      success: true,
+      maintenance: true,
+      url: MAINTENANCE_URL
+    });
+  }
+);
+
+app.post(
+  "/api/control/maintenance/off",
+  controlGuard,
+  (req, res) => {
+    maintenanceMode = false;
+
+    log(
+      `CONTROL: Maintenance OFF by ${getClientIp(req)}`
+    );
+
+    res.json({
+      success: true,
+      maintenance: false
+    });
+  }
+);
+
+// ============================================================
 // STATUS
 // ============================================================
 
@@ -844,15 +1207,29 @@ app.get("/api/status", async (req, res) => {
   }
 
   res.json({
-    online: true,
+    online: !serverOffline,
+    server_online: !serverOffline,
+    render_awake: true,
     service: SERVICE_NAME,
-    firebase: firebaseReady,
-    database: firebaseReady,
+    firebase:
+      !firebaseManuallyDisabled &&
+      firebaseReady,
+    database:
+      !firebaseManuallyDisabled &&
+      firebaseReady,
+    firebase_manually_disabled:
+      firebaseManuallyDisabled,
+    maintenance: maintenanceMode,
+    maintenance_url: MAINTENANCE_URL,
     firebase_status:
-      firebaseReady
-        ? "online"
-        : "temporarily_unavailable",
-    reconnecting: !firebaseReady,
+      firebaseManuallyDisabled
+        ? "manually_disabled"
+        : firebaseReady
+          ? "online"
+          : "temporarily_unavailable",
+    reconnecting:
+      !firebaseManuallyDisabled &&
+      !firebaseReady,
     last_successful_check:
       firebaseLastSuccessfulCheck,
     retry_attempts: FIREBASE_RETRIES
@@ -2674,6 +3051,24 @@ app.delete(
 );
 
 // ============================================================
+// CONTROL PAGE
+// ============================================================
+//
+// control.html is intentionally served before the normal static
+// website handling so it remains reachable in server OFFLINE mode.
+// The control API still requires the IP allowlist or secret.
+
+app.get(
+  ["/control.html", "/Control.html"],
+  controlGuard,
+  (req, res) => {
+    res.sendFile(
+      path.join(__dirname, "control.html")
+    );
+  }
+);
+
+// ============================================================
 // PAGE ALIASES
 // ============================================================
 
@@ -2816,6 +3211,15 @@ async function start() {
       );
       console.log(
         "Firebase write verification: ENABLED"
+      );
+      console.log(
+        "Control panel: ENABLED"
+      );
+      console.log(
+        `Control allowed IPs: ${CONTROL_ALLOWED_IPS.join(", ")}`
+      );
+      console.log(
+        "Render suspension: DISABLED by design"
       );
       console.log("========================================");
     }
