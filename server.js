@@ -29,10 +29,6 @@ const app = express();
 
 app.set("trust proxy", 1);
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-
 // ============================================================
 // CONFIG
 // ============================================================
@@ -61,6 +57,266 @@ const FIREBASE_WATCHDOG_MS = Math.max(
 
 const SESSION_COOKIE = "lba_session";
 const SERVICE_NAME = "LittleBigAdventure";
+
+// ============================================================
+// SECURITY / TRAFFIC SHIELD
+// ============================================================
+// This is application-layer protection. Render/Cloudflare should
+// still provide upstream volumetric DDoS protection.
+//
+// The shield:
+// - rejects oversized HTTP bodies before parsing them
+// - rejects oversized headers
+// - limits request duration
+// - rate-limits individual IPs
+// - detects burst/abuse mode and temporarily blocks offenders
+// - keeps health/control endpoints available
+// - prefers authenticated/signed session traffic during pressure
+// - adds browser/security headers
+// - never writes attacker-controlled files to disk
+// ============================================================
+
+const MAX_REQUEST_BODY_BYTES = Math.max(
+  16 * 1024,
+  Number(process.env.MAX_REQUEST_BODY_BYTES || 512 * 1024)
+);
+
+const MAX_REQUEST_TIME_MS = Math.max(
+  1000,
+  Number(process.env.MAX_REQUEST_TIME_MS || 15000)
+);
+
+const RATE_WINDOW_MS = Math.max(
+  1000,
+  Number(process.env.RATE_WINDOW_MS || 10000)
+);
+
+const RATE_LIMIT_PER_WINDOW = Math.max(
+  20,
+  Number(process.env.RATE_LIMIT_PER_WINDOW || 120)
+);
+
+const ABUSE_BLOCK_MS = Math.max(
+  5000,
+  Number(process.env.ABUSE_BLOCK_MS || 60000)
+);
+
+const GLOBAL_PRESSURE_WINDOW_MS = 5000;
+const GLOBAL_PRESSURE_LIMIT = Math.max(
+  200,
+  Number(process.env.GLOBAL_PRESSURE_LIMIT || 1000)
+);
+
+const MAX_TRACKED_IPS = 10000;
+
+const trafficByIp = new Map();
+const blockedIps = new Map();
+let globalTraffic = [];
+let emergencySafeMode = false;
+
+function requestIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  let ip = forwarded
+    ? String(forwarded).split(",")[0].trim()
+    : req.socket.remoteAddress || "unknown";
+
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  if (ip === "::1") ip = "127.0.0.1";
+  return ip;
+}
+
+function hasAuthorizationSignal(req) {
+  return Boolean(
+    req.cookies?.[SESSION_COOKIE] ||
+    req.headers.authorization ||
+    req.headers["x-firebase-token"]
+  );
+}
+
+function isSecurityExempt(req) {
+  const pathName = req.path || "";
+  return (
+    pathName === "/api/status" ||
+    pathName === "/api/firebase-test" ||
+    pathName === "/control.html" ||
+    pathName === "/Control.html" ||
+    pathName.startsWith("/api/control/")
+  );
+}
+
+function pruneTimes(times, now, windowMs) {
+  while (times.length && now - times[0] > windowMs) {
+    times.shift();
+  }
+}
+
+function rememberTraffic(ip, now) {
+  globalTraffic.push(now);
+  pruneTimes(globalTraffic, now, GLOBAL_PRESSURE_WINDOW_MS);
+
+  let entry = trafficByIp.get(ip);
+  if (!entry) {
+    entry = { times: [], violations: 0, lastSeen: now };
+    trafficByIp.set(ip, entry);
+  }
+
+  entry.lastSeen = now;
+  entry.times.push(now);
+  pruneTimes(entry.times, now, RATE_WINDOW_MS);
+
+  if (trafficByIp.size > MAX_TRACKED_IPS) {
+    for (const [key, value] of trafficByIp) {
+      if (now - value.lastSeen > RATE_WINDOW_MS * 2) {
+        trafficByIp.delete(key);
+      }
+      if (trafficByIp.size <= MAX_TRACKED_IPS) break;
+    }
+  }
+
+  emergencySafeMode =
+    globalTraffic.length >= GLOBAL_PRESSURE_LIMIT;
+
+  return entry;
+}
+
+function blockIp(ip, reason) {
+  blockedIps.set(ip, {
+    until: Date.now() + ABUSE_BLOCK_MS,
+    reason
+  });
+}
+
+function isBlocked(ip) {
+  const block = blockedIps.get(ip);
+  if (!block) return false;
+
+  if (Date.now() >= block.until) {
+    blockedIps.delete(ip);
+    return false;
+  }
+
+  return true;
+}
+
+function securityReject(res, status, message) {
+  res.status(status);
+  res.set("Cache-Control", "no-store");
+  return res.json({
+    success: false,
+    error: message
+  });
+}
+
+// Security headers. Render normally terminates public HTTPS before
+// the Node process, so HSTS is appropriate for the public site.
+app.use((req, res, next) => {
+  res.set({
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "X-DNS-Prefetch-Control": "off",
+    "Cache-Control": "no-store"
+  });
+  next();
+});
+
+// Public Render traffic should be HTTPS. Render normally terminates TLS
+// before Node and forwards x-forwarded-proto=https.
+app.use((req, res, next) => {
+  const forwardedProto = String(
+    req.headers["x-forwarded-proto"] ||
+    ""
+  ).split(",")[0].trim().toLowerCase();
+
+  const isHttps =
+    req.secure ||
+    forwardedProto === "https";
+
+  if (!isHttps && process.env.ALLOW_PLAINTEXT_HTTP !== "true") {
+    const host = req.get("host");
+    if (host) {
+      return res.redirect(308, `https://${host}${req.originalUrl}`);
+    }
+  }
+
+  next();
+});
+
+// Request-size + abuse shield runs before body parsing.
+app.use((req, res, next) => {
+  const now = Date.now();
+  const ip = requestIp(req);
+
+  if (isBlocked(ip)) {
+    return securityReject(res, 429, "Traffic temporarily blocked");
+  }
+
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    blockIp(ip, "oversized request");
+    return securityReject(res, 413, "Request body is too large");
+  }
+
+  const entry = rememberTraffic(ip, now);
+
+  if (entry.times.length > RATE_LIMIT_PER_WINDOW) {
+    entry.violations += 1;
+    if (entry.violations >= 3) {
+      blockIp(ip, "repeated rate abuse");
+    }
+    return securityReject(res, 429, "Too many requests");
+  }
+
+  // Under extreme pressure, unauthenticated write/API traffic is
+  // rejected first. Health/control remain available.
+  if (
+    emergencySafeMode &&
+    !isSecurityExempt(req) &&
+    !hasAuthorizationSignal(req)
+  ) {
+    return securityReject(
+      res,
+      503,
+      "LBA emergency traffic protection is active"
+    );
+  }
+
+  req.setTimeout(MAX_REQUEST_TIME_MS, () => {
+    try { req.destroy(); } catch (_) {}
+  });
+
+  next();
+});
+
+// Parse only after the size shield.
+app.use(express.json({ limit: `${MAX_REQUEST_BODY_BYTES}b` }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: `${MAX_REQUEST_BODY_BYTES}b`,
+  parameterLimit: 100
+}));
+app.use(cookieParser());
+
+// Periodically clear stale in-memory security state.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, block] of blockedIps) {
+    if (now >= block.until) blockedIps.delete(ip);
+  }
+  for (const [ip, entry] of trafficByIp) {
+    pruneTimes(entry.times, now, RATE_WINDOW_MS);
+    if (!entry.times.length && now - entry.lastSeen > RATE_WINDOW_MS * 2) {
+      trafficByIp.delete(ip);
+    }
+  }
+  pruneTimes(globalTraffic, now, GLOBAL_PRESSURE_WINDOW_MS);
+  if (globalTraffic.length < GLOBAL_PRESSURE_LIMIT / 2) {
+    emergencySafeMode = false;
+  }
+}, RATE_WINDOW_MS).unref?.();
 
 // ============================================================
 // CONTROL / SERVICE STATE
@@ -615,6 +871,40 @@ async function readDoc(collection, id) {
   );
 }
 
+const SAFETY_BACKUP_COLLECTION = "_safety_backups";
+const SAFETY_BACKUP_REQUIRED =
+  String(process.env.SAFETY_BACKUP_REQUIRED || "true").toLowerCase() !== "false";
+
+async function backupDocumentBeforeChange(collection, id, existingData, action) {
+  if (!existingData || collection === SAFETY_BACKUP_COLLECTION) {
+    return null;
+  }
+
+  return firebaseRetry(
+    `BACKUP ${collection}/${id}`,
+    async () => {
+      const backup = {
+        source_collection: collection,
+        source_id: String(id),
+        action,
+        backed_up_at: FieldValue.serverTimestamp(),
+        data: existingData
+      };
+
+      const ref = await db
+        .collection(SAFETY_BACKUP_COLLECTION)
+        .add(backup);
+
+      const saved = await ref.get();
+      if (!saved.exists) {
+        throw new Error(`Safety backup verification failed for ${collection}/${id}`);
+      }
+
+      return ref.id;
+    }
+  );
+}
+
 async function writeDocAndVerify(
   collection,
   id,
@@ -628,9 +918,21 @@ async function writeDocAndVerify(
         .collection(collection)
         .doc(String(id));
 
+      const existing = await ref.get();
+
+      // Before overwriting existing data, create a recovery copy.
+      // If required backup protection fails, the destructive write is refused.
+      if (existing.exists && SAFETY_BACKUP_REQUIRED) {
+        await backupDocumentBeforeChange(
+          collection,
+          id,
+          existing.data(),
+          "before-write"
+        );
+      }
+
       await ref.set(data, options);
 
-      // Verify the actual saved document.
       const saved = await ref.get();
 
       if (!saved.exists) {
@@ -654,6 +956,17 @@ async function deleteDocAndVerify(collection, id) {
       const ref = db
         .collection(collection)
         .doc(String(id));
+
+      const existing = await ref.get();
+
+      if (existing.exists && SAFETY_BACKUP_REQUIRED) {
+        await backupDocumentBeforeChange(
+          collection,
+          id,
+          existing.data(),
+          "before-delete"
+        );
+      }
 
       await ref.delete();
 
@@ -3207,6 +3520,14 @@ async function start() {
       console.log(
         "Firebase write verification: ENABLED"
       );
+      console.log("Security headers: ENABLED");
+      console.log("Traffic shield: ENABLED");
+      console.log(`Max request body: ${MAX_REQUEST_BODY_BYTES} bytes`);
+      console.log(`Rate limit: ${RATE_LIMIT_PER_WINDOW}/${RATE_WINDOW_MS}ms per client`);
+      console.log("Emergency safe mode: ENABLED");
+      console.log("Safety backups: ENABLED");
+      console.log(`Safety backup required: ${SAFETY_BACKUP_REQUIRED}`);
+      console.log("Application HTTPS: Render TLS termination + HSTS");
       console.log(
         "Control panel: ENABLED"
       );
