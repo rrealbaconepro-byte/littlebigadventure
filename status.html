@@ -1,0 +1,1241 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>LittleBigAdventure Status</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background:
+    linear-gradient(rgba(255,255,255,.45), rgba(255,255,255,.45)),
+    #d9c3a0;
+  color: #333;
+}
+
+.header {
+  background: rgba(255,255,255,.9);
+  border-bottom: 1px solid rgba(0,0,0,.15);
+  padding: 14px 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-inner {
+  max-width: 1100px;
+  margin: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: bold;
+  font-size: 21px;
+}
+
+.logo img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+
+.home-button {
+  text-decoration: none;
+  color: #333;
+  background: white;
+  border: 1px solid #bbb;
+  border-radius: 8px;
+  padding: 9px 14px;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 30px auto;
+  padding: 0 15px;
+}
+
+.hero {
+  background: rgba(255,255,255,.94);
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 5px 20px rgba(0,0,0,.12);
+  margin-bottom: 20px;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+.subtitle {
+  color: #777;
+  margin-bottom: 22px;
+}
+
+.health {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.health-number {
+  font-size: 42px;
+  font-weight: bold;
+}
+
+.health-label {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.health-bar {
+  width: 100%;
+  height: 15px;
+  background: #ddd;
+  border-radius: 20px;
+  overflow: hidden;
+  margin-top: 18px;
+}
+
+.health-fill {
+  height: 100%;
+  width: 0%;
+  transition: width .3s ease, background .3s ease;
+  border-radius: 20px;
+}
+
+.green {
+  color: #159447;
+}
+
+.yellow {
+  color: #c78a00;
+}
+
+.red {
+  color: #d12d2d;
+}
+
+.gray {
+  color: #777;
+}
+
+.system-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 15px;
+}
+
+.card {
+  background: rgba(255,255,255,.94);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 4px 15px rgba(0,0,0,.1);
+  border: 1px solid rgba(0,0,0,.08);
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.card h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.status-pill {
+  border-radius: 20px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: bold;
+  background: #eee;
+}
+
+.status-pill.online {
+  background: #dff7e8;
+  color: #168744;
+}
+
+.status-pill.warning {
+  background: #fff0c7;
+  color: #a66d00;
+}
+
+.status-pill.offline {
+  background: #ffdede;
+  color: #c62828;
+}
+
+.status-pill.checking {
+  background: #e7e7e7;
+  color: #666;
+}
+
+.card-description {
+  margin: 12px 0;
+  color: #777;
+  font-size: 14px;
+}
+
+.metric {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid #eee;
+  padding-top: 9px;
+  margin-top: 9px;
+  font-size: 13px;
+}
+
+.section {
+  margin-top: 20px;
+}
+
+.section-title {
+  background: rgba(255,255,255,.94);
+  border-radius: 14px 14px 0 0;
+  padding: 18px 20px;
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.outages {
+  background: rgba(255,255,255,.94);
+  border-radius: 0 0 14px 14px;
+  padding: 15px 20px;
+}
+
+.outage {
+  padding: 13px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.outage:last-child {
+  border-bottom: 0;
+}
+
+.outage-date {
+  font-weight: bold;
+}
+
+.outage-event {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.last-check {
+  text-align: center;
+  color: #777;
+  font-size: 13px;
+  margin: 20px 0;
+}
+
+.footer {
+  text-align: center;
+  color: #777;
+  padding: 30px 15px;
+}
+
+.dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.dot.green {
+  background: #20a052;
+}
+
+.dot.yellow {
+  background: #d69a00;
+}
+
+.dot.red {
+  background: #d12d2d;
+}
+
+.dot.gray {
+  background: #888;
+}
+
+@media(max-width:600px) {
+  .hero h1 {
+    font-size: 26px;
+  }
+
+  .health-number {
+    font-size: 34px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<header class="header">
+  <div class="header-inner">
+
+    <div class="logo">
+      <img
+        src="https://i.postimg.cc/0QHwXHg/Chat-GPT-Image-Sep-29-2026-at-05-31-34-PM.png"
+        alt="LBA"
+        onerror="this.style.display='none'"
+      >
+      <span>LittleBigAdventure Status</span>
+    </div>
+
+    <a class="home-button" href="/">
+      ← Homepage
+    </a>
+
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="hero">
+
+    <h1>System Status</h1>
+
+    <div class="subtitle">
+      Live health information for LittleBigAdventure services.
+    </div>
+
+    <div class="health">
+
+      <div id="healthNumber" class="health-number green">
+        --%
+      </div>
+
+      <div>
+        <div id="healthLabel" class="health-label">
+          Checking systems...
+        </div>
+
+        <div id="healthDescription">
+          Connecting to LBA services.
+        </div>
+      </div>
+
+    </div>
+
+    <div class="health-bar">
+      <div id="healthFill" class="health-fill"></div>
+    </div>
+
+  </section>
+
+
+  <section class="system-grid">
+
+    <!-- WEBSITE -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🌐 Website</h3>
+        <span id="websiteStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="websiteDescription" class="card-description">
+        Checking website connection...
+      </div>
+
+      <div class="metric">
+        <span>Response</span>
+        <strong id="websiteResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- API -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🔌 API</h3>
+        <span id="apiStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="apiDescription" class="card-description">
+        Checking API...
+      </div>
+
+      <div class="metric">
+        <span>Response</span>
+        <strong id="apiResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- RENDER -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🖥️ Render Server</h3>
+        <span id="renderStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="renderDescription" class="card-description">
+        Checking Render server...
+      </div>
+
+      <div class="metric">
+        <span>Server</span>
+        <strong id="renderResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- FIREBASE -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🔥 Firebase</h3>
+        <span id="firebaseStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="firebaseDescription" class="card-description">
+        Checking Firebase...
+      </div>
+
+      <div class="metric">
+        <span>Database</span>
+        <strong id="firebaseResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- GAME SERVERS -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🎮 Game Servers</h3>
+        <span id="gameStatus" class="status-pill warning">
+          Building
+        </span>
+      </div>
+
+      <div class="card-description">
+        Game server infrastructure is currently being built.
+      </div>
+
+      <div class="metric">
+        <span>Status</span>
+        <strong>Still building</strong>
+      </div>
+
+    </div>
+
+
+    <!-- AUTH -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>👤 Authentication</h3>
+        <span id="authStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="authDescription" class="card-description">
+        Checking login system...
+      </div>
+
+      <div class="metric">
+        <span>API</span>
+        <strong id="authResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- LEVELS -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>🗺️ Levels</h3>
+        <span id="levelsStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="levelsDescription" class="card-description">
+        Checking level database...
+      </div>
+
+      <div class="metric">
+        <span>Database</span>
+        <strong id="levelsResponse">--</strong>
+      </div>
+
+    </div>
+
+
+    <!-- POSTS -->
+
+    <div class="card">
+
+      <div class="card-top">
+        <h3>💬 Posts</h3>
+        <span id="postsStatus" class="status-pill checking">
+          Checking
+        </span>
+      </div>
+
+      <div id="postsDescription" class="card-description">
+        Checking post system...
+      </div>
+
+      <div class="metric">
+        <span>Database</span>
+        <strong id="postsResponse">--</strong>
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- OUTAGE HISTORY -->
+
+  <section class="section">
+
+    <div class="section-title">
+      📅 Outage History
+    </div>
+
+    <div id="outageHistory" class="outages">
+      <div class="outage">
+        <div class="outage-date">
+          Loading outage history...
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+
+  <div class="last-check">
+    Last checked:
+    <strong id="lastCheck">--</strong>
+    <br>
+    Automatically checking every 2 seconds.
+  </div>
+
+</main>
+
+
+<footer class="footer">
+  LittleBigAdventure Status Center
+</footer>
+
+
+<script>
+
+const API_BASE = "";
+
+const outageHistory = [];
+
+let previousStates = {};
+
+
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
+
+function setStatus(elementId, state, text) {
+
+  const element = document.getElementById(elementId);
+
+  if (!element) return;
+
+  element.className = "status-pill " + state;
+
+  element.textContent = text;
+}
+
+
+function setText(elementId, text) {
+
+  const element = document.getElementById(elementId);
+
+  if (element) {
+    element.textContent = text;
+  }
+
+}
+
+
+function nowString() {
+
+  return new Date().toLocaleString();
+
+}
+
+
+function pingRequest(url) {
+
+  const start = performance.now();
+
+  return fetch(
+    url + (url.includes("?") ? "&" : "?") +
+    "statusCheck=" +
+    Date.now(),
+    {
+      method: "GET",
+      cache: "no-store"
+    }
+  )
+  .then(async response => {
+
+    const elapsed =
+      Math.round(performance.now() - start);
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      elapsed
+    };
+
+  })
+  .catch(error => {
+
+    const elapsed =
+      Math.round(performance.now() - start);
+
+    return {
+      ok: false,
+      status: 0,
+      elapsed,
+      error: error.message
+    };
+
+  });
+
+}
+
+
+// --------------------------------------------------
+// Outage tracking
+// --------------------------------------------------
+
+function recordOutage(service, state) {
+
+  const previous = previousStates[service];
+
+  if (
+    previous &&
+    previous !== state &&
+    state === "offline"
+  ) {
+
+    outageHistory.unshift({
+      service,
+      time: new Date(),
+      message: service + " became unavailable."
+    });
+
+    renderOutages();
+
+  }
+
+  previousStates[service] = state;
+
+}
+
+
+function renderOutages() {
+
+  const container =
+    document.getElementById("outageHistory");
+
+  if (!outageHistory.length) {
+
+    container.innerHTML = `
+      <div class="outage">
+        <div class="outage-date green">
+          🟢 No outages detected
+        </div>
+
+        <div class="outage-event">
+          LBA has not detected an outage during this monitoring session.
+        </div>
+      </div>
+    `;
+
+    return;
+  }
+
+
+  container.innerHTML =
+    outageHistory.map(item => `
+
+      <div class="outage">
+
+        <div class="outage-date red">
+          🔴 ${escapeHtml(item.service)}
+        </div>
+
+        <div class="outage-event">
+          ${escapeHtml(item.message)}
+          <br>
+          <small>
+            ${escapeHtml(item.time.toLocaleString())}
+          </small>
+        </div>
+
+      </div>
+
+    `).join("");
+
+}
+
+
+function escapeHtml(value) {
+
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
+}
+
+
+// --------------------------------------------------
+// Main status check
+// --------------------------------------------------
+
+async function checkAllSystems() {
+
+  const checks = {};
+
+  // Website
+  checks.website =
+    await pingRequest("/");
+
+  if (checks.website.ok) {
+
+    setStatus(
+      "websiteStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "websiteDescription",
+      "Website is responding normally."
+    );
+
+    setText(
+      "websiteResponse",
+      checks.website.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "websiteStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "websiteDescription",
+      "Website is not responding."
+    );
+
+    setText(
+      "websiteResponse",
+      checks.website.status || "Failed"
+    );
+
+  }
+
+
+  // API
+  checks.api =
+    await pingRequest("/api/status");
+
+  if (checks.api.ok) {
+
+    setStatus(
+      "apiStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "apiDescription",
+      "API is responding."
+    );
+
+    setText(
+      "apiResponse",
+      checks.api.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "apiStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "apiDescription",
+      "API is unavailable."
+    );
+
+    setText(
+      "apiResponse",
+      checks.api.status || "Failed"
+    );
+
+  }
+
+
+  // Render
+  if (checks.api.ok) {
+
+    setStatus(
+      "renderStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "renderDescription",
+      "Render server is reachable."
+    );
+
+    setText(
+      "renderResponse",
+      "Reachable"
+    );
+
+  } else {
+
+    setStatus(
+      "renderStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "renderDescription",
+      "Render server/API is unavailable."
+    );
+
+    setText(
+      "renderResponse",
+      "Unavailable"
+    );
+
+  }
+
+
+  // Firebase
+  let firebaseResult = null;
+
+  if (checks.api.ok) {
+
+    firebaseResult =
+      await pingRequest("/api/firebase-test");
+
+  }
+
+  checks.firebase =
+    firebaseResult || {
+      ok: false,
+      status: 0
+    };
+
+
+  if (checks.firebase.ok) {
+
+    setStatus(
+      "firebaseStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "firebaseDescription",
+      "Firebase and Firestore are responding."
+    );
+
+    setText(
+      "firebaseResponse",
+      checks.firebase.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "firebaseStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "firebaseDescription",
+      "Firebase is unavailable."
+    );
+
+    setText(
+      "firebaseResponse",
+      "Unavailable"
+    );
+
+  }
+
+
+  // Authentication
+  checks.auth =
+    await pingRequest("/api/auth/me");
+
+  if (
+    checks.auth.ok ||
+    checks.auth.status === 401
+  ) {
+
+    setStatus(
+      "authStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "authDescription",
+      "Authentication API is responding."
+    );
+
+    setText(
+      "authResponse",
+      checks.auth.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "authStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "authDescription",
+      "Authentication API is unavailable."
+    );
+
+    setText(
+      "authResponse",
+      checks.auth.status || "Failed"
+    );
+
+  }
+
+
+  // Levels
+  checks.levels =
+    await pingRequest("/api/levels");
+
+  if (checks.levels.ok) {
+
+    setStatus(
+      "levelsStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "levelsDescription",
+      "Level database is responding."
+    );
+
+    setText(
+      "levelsResponse",
+      checks.levels.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "levelsStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "levelsDescription",
+      "Level service is unavailable."
+    );
+
+    setText(
+      "levelsResponse",
+      "Unavailable"
+    );
+
+  }
+
+
+  // Posts
+  checks.posts =
+    await pingRequest("/api/posts");
+
+  if (checks.posts.ok) {
+
+    setStatus(
+      "postsStatus",
+      "online",
+      "Online"
+    );
+
+    setText(
+      "postsDescription",
+      "Post database is responding."
+    );
+
+    setText(
+      "postsResponse",
+      checks.posts.elapsed + " ms"
+    );
+
+  } else {
+
+    setStatus(
+      "postsStatus",
+      "offline",
+      "Offline"
+    );
+
+    setText(
+      "postsDescription",
+      "Post service is unavailable."
+    );
+
+    setText(
+      "postsResponse",
+      "Unavailable"
+    );
+
+  }
+
+
+  // ------------------------------------------------
+  // Record outages
+  // ------------------------------------------------
+
+  recordOutage(
+    "Website",
+    checks.website.ok ? "online" : "offline"
+  );
+
+  recordOutage(
+    "API",
+    checks.api.ok ? "online" : "offline"
+  );
+
+  recordOutage(
+    "Firebase",
+    checks.firebase.ok ? "online" : "offline"
+  );
+
+  recordOutage(
+    "Authentication",
+    (
+      checks.auth.ok ||
+      checks.auth.status === 401
+    )
+      ? "online"
+      : "offline"
+  );
+
+  recordOutage(
+    "Levels",
+    checks.levels.ok
+      ? "online"
+      : "offline"
+  );
+
+  recordOutage(
+    "Posts",
+    checks.posts.ok
+      ? "online"
+      : "offline"
+  );
+
+
+  // ------------------------------------------------
+  // Overall health
+  // ------------------------------------------------
+
+  const importantServices = [
+
+    checks.website.ok,
+
+    checks.api.ok,
+
+    checks.firebase.ok,
+
+    (
+      checks.auth.ok ||
+      checks.auth.status === 401
+    ),
+
+    checks.levels.ok,
+
+    checks.posts.ok
+
+  ];
+
+
+  const working =
+    importantServices.filter(Boolean).length;
+
+  const percentage =
+    Math.round(
+      (working / importantServices.length) * 100
+    );
+
+
+  const healthNumber =
+    document.getElementById("healthNumber");
+
+  const healthFill =
+    document.getElementById("healthFill");
+
+
+  healthNumber.textContent =
+    percentage + "%";
+
+  healthFill.style.width =
+    percentage + "%";
+
+
+  healthNumber.className =
+    "health-number " +
+    (
+      percentage >= 90
+        ? "green"
+        : percentage >= 60
+          ? "yellow"
+          : "red"
+    );
+
+
+  healthFill.style.background =
+    percentage >= 90
+      ? "#20a052"
+      : percentage >= 60
+        ? "#d69a00"
+        : "#d12d2d";
+
+
+  if (percentage >= 90) {
+
+    setText(
+      "healthLabel",
+      "All systems operational"
+    );
+
+    setText(
+      "healthDescription",
+      "LittleBigAdventure is running normally."
+    );
+
+  } else if (percentage >= 60) {
+
+    setText(
+      "healthLabel",
+      "Some systems have issues"
+    );
+
+    setText(
+      "healthDescription",
+      "LittleBigAdventure is partially operational."
+    );
+
+  } else {
+
+    setText(
+      "healthLabel",
+      "Major outage"
+    );
+
+    setText(
+      "healthDescription",
+      "Multiple LBA services are currently unavailable."
+    );
+
+  }
+
+
+  setText(
+    "lastCheck",
+    nowString()
+  );
+
+}
+
+
+// --------------------------------------------------
+// Start
+// --------------------------------------------------
+
+renderOutages();
+
+checkAllSystems();
+
+
+// Refresh every 2 seconds.
+setInterval(
+  checkAllSystems,
+  2000
+);
+
+</script>
+
+</body>
+</html>
+```
