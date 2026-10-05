@@ -1,0 +1,900 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>LBA Control Center</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+
+    background:
+        linear-gradient(
+            rgba(255,255,255,.35),
+            rgba(255,255,255,.35)
+        ),
+        #c8b08a;
+
+    color: #222;
+}
+
+header {
+    background: rgba(255,255,255,.7);
+
+    padding: 22px;
+
+    border-bottom:
+        2px solid rgba(0,0,0,.15);
+
+    box-shadow:
+        0 4px 15px rgba(0,0,0,.15);
+}
+
+header h1 {
+    margin: 0;
+    font-size: 28px;
+}
+
+header p {
+    margin: 6px 0 0;
+    opacity: .7;
+}
+
+.container {
+    max-width: 950px;
+    margin: 30px auto;
+    padding: 20px;
+}
+
+.notice {
+    background: #fff3cd;
+
+    border:
+        1px solid #e0bd55;
+
+    border-radius: 14px;
+
+    padding: 16px;
+
+    margin-bottom: 22px;
+}
+
+.status-grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(210px, 1fr)
+        );
+
+    gap: 15px;
+
+    margin-bottom: 22px;
+}
+
+.card {
+    background:
+        rgba(255,255,255,.75);
+
+    border-radius: 16px;
+
+    padding: 20px;
+
+    box-shadow:
+        0 5px 18px rgba(0,0,0,.12);
+}
+
+.card h2 {
+    margin-top: 0;
+    font-size: 19px;
+}
+
+.status {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.online {
+    color: #168b35;
+}
+
+.offline {
+    color: #c62828;
+}
+
+.maintenance-on {
+    color: #ef8f00;
+}
+
+.buttons {
+    display: grid;
+    gap: 14px;
+}
+
+button {
+    width: 100%;
+
+    border: 0;
+
+    border-radius: 13px;
+
+    padding: 17px;
+
+    font-size: 17px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+
+    transition:
+        transform .15s,
+        filter .15s;
+}
+
+button:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.05);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+.stop {
+    background: #d32f2f;
+    color: white;
+}
+
+.start {
+    background: #2e9d45;
+    color: white;
+}
+
+.firebase {
+    background: #e58a00;
+    color: white;
+}
+
+.maintenance {
+    background: #555;
+    color: white;
+}
+
+.log {
+    margin-top: 22px;
+
+    background: #171717;
+
+    color: #ddd;
+
+    border-radius: 13px;
+
+    padding: 16px;
+
+    min-height: 150px;
+
+    font-family: monospace;
+
+    white-space: pre-wrap;
+
+    overflow-wrap: break-word;
+}
+
+#accessDenied {
+    display: none;
+
+    max-width: 600px;
+
+    margin: 100px auto;
+
+    padding: 30px;
+
+    text-align: center;
+
+    background:
+        rgba(255,255,255,.8);
+
+    border-radius: 18px;
+
+    box-shadow:
+        0 5px 20px rgba(0,0,0,.15);
+}
+
+#controlPanel {
+    display: none;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>🎮 LittleBigAdventure Control Center</h1>
+    <p>Server administration</p>
+</header>
+
+
+<!-- ACCESS DENIED -->
+
+<div id="accessDenied">
+
+    <h1>🔒 Access Denied</h1>
+
+    <p>
+        This control panel is only available
+        from the authorized administrator network.
+    </p>
+
+</div>
+
+
+<!-- CONTROL PANEL -->
+
+<div id="controlPanel">
+
+<div class="container">
+
+
+    <div class="notice">
+
+        ⚠️
+        <strong>Administrator Control</strong>
+
+        <br>
+
+        These controls affect the
+        LittleBigAdventure service.
+
+    </div>
+
+
+    <!-- STATUS -->
+
+    <div class="status-grid">
+
+
+        <div class="card">
+
+            <h2>🌐 LBA Server</h2>
+
+            <div
+                id="serverStatus"
+                class="status online"
+            >
+                🟢 ONLINE
+            </div>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>🔥 Firebase</h2>
+
+            <div
+                id="firebaseStatus"
+                class="status online"
+            >
+                🟢 ONLINE
+            </div>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>🛠️ Maintenance</h2>
+
+            <div
+                id="maintenanceStatus"
+                class="status"
+            >
+                ⚪ OFF
+            </div>
+
+        </div>
+
+
+        <div class="card">
+
+            <h2>🖥️ Render</h2>
+
+            <div
+                id="renderStatus"
+                class="status online"
+            >
+                🟢 AWAKE
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- SERVER -->
+
+    <div class="card">
+
+        <h2>🌐 Server Controls</h2>
+
+        <div class="buttons">
+
+            <button
+                class="stop"
+                onclick="stopServer()"
+            >
+                🔴 STOP LBA SERVER
+            </button>
+
+
+            <button
+                class="start"
+                onclick="startServer()"
+            >
+                🟢 TURN SERVER BACK UP
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <br>
+
+
+    <!-- FIREBASE -->
+
+    <div class="card">
+
+        <h2>🔥 Firebase Controls</h2>
+
+        <div class="buttons">
+
+            <button
+                class="firebase"
+                onclick="stopFirebase()"
+            >
+                🔴 STOP FIREBASE
+            </button>
+
+
+            <button
+                class="start"
+                onclick="startFirebase()"
+            >
+                🟢 START FIREBASE
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <br>
+
+
+    <!-- MAINTENANCE -->
+
+    <div class="card">
+
+        <h2>🛠️ Maintenance Controls</h2>
+
+        <div class="buttons">
+
+            <button
+                class="maintenance"
+                onclick="enableMaintenance()"
+            >
+                🛠️ ENABLE MAINTENANCE MODE
+            </button>
+
+
+            <button
+                class="start"
+                onclick="disableMaintenance()"
+            >
+                🟢 DISABLE MAINTENANCE MODE
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <!-- LOG -->
+
+    <div
+        id="log"
+        class="log"
+    >
+LBA Control Center ready.
+Waiting for administrator action...
+    </div>
+
+
+</div>
+
+</div>
+
+
+<script>
+
+/*
+==================================================
+LBA CONTROL CENTER
+==================================================
+
+IMPORTANT:
+
+The browser cannot reliably determine its own
+private 192.168.178.69 address.
+
+Therefore the REAL authorization must happen
+on the backend.
+
+This HTML only provides the control interface.
+==================================================
+*/
+
+
+const MAINTENANCE_URL =
+    "https://serviceunavailable.neocities.org/Maintenance";
+
+
+function log(message) {
+
+    const box =
+        document.getElementById("log");
+
+    const time =
+        new Date().toLocaleTimeString();
+
+    box.textContent =
+        "[" +
+        time +
+        "] " +
+        message +
+        "\n" +
+        box.textContent;
+}
+
+
+/*
+==================================================
+LOAD CONTROL PANEL
+==================================================
+*/
+
+function showControlPanel() {
+
+    document.getElementById(
+        "controlPanel"
+    ).style.display = "block";
+
+}
+
+
+/*
+==================================================
+SERVER
+==================================================
+*/
+
+async function stopServer() {
+
+    if (!confirm(
+        "STOP THE LBA SERVER?\n\n" +
+        "Render will remain awake, " +
+        "but the LBA server will enter " +
+        "OFFLINE mode."
+    )) {
+        return;
+    }
+
+    log(
+        "Requesting LBA server OFFLINE mode..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/server/stop",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Server control failed"
+            );
+
+        }
+
+        document.getElementById(
+            "serverStatus"
+        ).textContent =
+            "🔴 OFFLINE";
+
+        document.getElementById(
+            "serverStatus"
+        ).className =
+            "status offline";
+
+
+        document.getElementById(
+            "renderStatus"
+        ).textContent =
+            "🟢 AWAKE";
+
+
+        log(
+            "LBA server is now OFFLINE. " +
+            "Render remains AWAKE."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+async function startServer() {
+
+    log(
+        "Requesting LBA server startup..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/server/start",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Server startup failed"
+            );
+
+        }
+
+
+        document.getElementById(
+            "serverStatus"
+        ).textContent =
+            "🟢 ONLINE";
+
+        document.getElementById(
+            "serverStatus"
+        ).className =
+            "status online";
+
+
+        document.getElementById(
+            "renderStatus"
+        ).textContent =
+            "🟢 AWAKE";
+
+
+        log(
+            "LBA server is ONLINE again."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+/*
+==================================================
+FIREBASE
+==================================================
+*/
+
+async function stopFirebase() {
+
+    if (!confirm(
+        "STOP FIREBASE?\n\n" +
+        "LBA will stop Firebase reads " +
+        "and writes."
+    )) {
+        return;
+    }
+
+    log(
+        "Stopping Firebase..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/firebase/stop",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Firebase control failed"
+            );
+
+        }
+
+
+        document.getElementById(
+            "firebaseStatus"
+        ).textContent =
+            "🔴 OFFLINE";
+
+        document.getElementById(
+            "firebaseStatus"
+        ).className =
+            "status offline";
+
+
+        log(
+            "Firebase is OFFLINE."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+async function startFirebase() {
+
+    log(
+        "Starting Firebase..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/firebase/start",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Firebase startup failed"
+            );
+
+        }
+
+
+        document.getElementById(
+            "firebaseStatus"
+        ).textContent =
+            "🟢 ONLINE";
+
+        document.getElementById(
+            "firebaseStatus"
+        ).className =
+            "status online";
+
+
+        log(
+            "Firebase is ONLINE."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+/*
+==================================================
+MAINTENANCE
+==================================================
+*/
+
+async function enableMaintenance() {
+
+    if (!confirm(
+        "ENABLE MAINTENANCE MODE?\n\n" +
+        "Visitors will be sent to:\n" +
+        MAINTENANCE_URL
+    )) {
+        return;
+    }
+
+    log(
+        "Enabling maintenance mode..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/maintenance/on",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Maintenance control failed"
+            );
+
+        }
+
+
+        document.getElementById(
+            "maintenanceStatus"
+        ).textContent =
+            "🟠 ON";
+
+        document.getElementById(
+            "maintenanceStatus"
+        ).className =
+            "status maintenance-on";
+
+
+        log(
+            "Maintenance mode ENABLED."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+async function disableMaintenance() {
+
+    log(
+        "Disabling maintenance mode..."
+    );
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/control/maintenance/off",
+                {
+                    method: "POST",
+                    credentials: "same-origin"
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.error ||
+                "Maintenance control failed"
+            );
+
+        }
+
+
+        document.getElementById(
+            "maintenanceStatus"
+        ).textContent =
+            "⚪ OFF";
+
+        document.getElementById(
+            "maintenanceStatus"
+        ).className =
+            "status";
+
+
+        log(
+            "Maintenance mode DISABLED."
+        );
+
+    } catch (error) {
+
+        log(
+            "ERROR: " +
+            error.message
+        );
+
+    }
+
+}
+
+
+/*
+==================================================
+START
+==================================================
+*/
+
+showControlPanel();
+
+</script>
+
+</body>
+</html>
+```
