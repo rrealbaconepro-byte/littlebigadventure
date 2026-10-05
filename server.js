@@ -3060,8 +3060,10 @@ app.delete(
 
 app.get(
   ["/control.html", "/Control.html"],
-  controlGuard,
   (req, res) => {
+    // control.html itself is PUBLIC and remains reachable even
+    // when serverOffline is enabled.
+    // The control API endpoints remain protected by controlGuard.
     res.sendFile(
       path.join(__dirname, "control.html")
     );
