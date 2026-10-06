@@ -414,7 +414,7 @@ setInterval(() => {
 
 const CONTROL_ALLOWED_IPS = String(
   process.env.CONTROL_ALLOWED_IPS ||
-  "192.168.178.69"
+  "185.87.119.86"
 )
   .split(",")
   .map(value => value.trim())
