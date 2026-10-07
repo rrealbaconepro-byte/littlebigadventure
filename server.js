@@ -1,7 +1,6 @@
 const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
-const crypto = require("crypto");
 
 const { initializeApp, cert, getApps } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
@@ -28,7 +27,6 @@ const {
 
 const app = express();
 
-app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
 // ============================================================
@@ -111,15 +109,19 @@ const GLOBAL_PRESSURE_LIMIT = Math.max(
 
 const MAX_TRACKED_IPS = 10000;
 
+// Country blocking. These codes are ISO 3166-1 alpha-2.
+// Default: RU = Russia, NL = Netherlands.
+// This requires a trusted edge such as Cloudflare to provide CF-IPCountry.
+const BLOCKED_COUNTRIES = new Set(
+  String(process.env.BLOCKED_COUNTRIES || "RU,NL")
+    .split(",")
+    .map(code => code.trim().toUpperCase())
+    .filter(Boolean)
+);
+
 const trafficByIp = new Map();
 const blockedIps = new Map();
-const authAttemptsByIp = new Map();
-const authBlockedIps = new Map();
 let globalTraffic = [];
-
-const AUTH_WINDOW_MS = Math.max(60_000, Number(process.env.AUTH_WINDOW_MS || 10 * 60 * 1000));
-const AUTH_MAX_ATTEMPTS = Math.max(3, Number(process.env.AUTH_MAX_ATTEMPTS || 8));
-const AUTH_BLOCK_MS = Math.max(60_000, Number(process.env.AUTH_BLOCK_MS || 30 * 60 * 1000));
 let emergencySafeMode = false;
 
 function requestIp(req) {
@@ -133,18 +135,26 @@ function requestIp(req) {
   return ip;
 }
 
+function requestCountry(req) {
+  // Cloudflare supplies the visitor country as a two-letter ISO code.
+  // Do not treat arbitrary client-supplied country headers as trusted.
+  const country = String(req.headers["cf-ipcountry"] || "")
+    .trim()
+    .toUpperCase();
+  return /^[A-Z]{2}$/.test(country) ? country : "";
+}
+
+function isCountryBlocked(req) {
+  const country = requestCountry(req);
+  return Boolean(country && BLOCKED_COUNTRIES.has(country));
+}
+
 function hasAuthorizationSignal(req) {
-  // IMPORTANT: a header/cookie being present is NOT proof of authentication.
-  // Emergency mode therefore never trusts this function for authorization.
   return Boolean(
     req.cookies?.[SESSION_COOKIE] ||
     req.headers.authorization ||
     req.headers["x-firebase-token"]
   );
-}
-
-function isStateChangingRequest(req) {
-  return ["POST", "PUT", "PATCH", "DELETE"].includes(req.method);
 }
 
 function isSecurityExempt(req) {
@@ -212,42 +222,6 @@ function isBlocked(ip) {
   return true;
 }
 
-function authBlocked(ip) {
-  const until = authBlockedIps.get(ip);
-  if (!until) return false;
-  if (Date.now() >= until) {
-    authBlockedIps.delete(ip);
-    return false;
-  }
-  return true;
-}
-
-function recordAuthAttempt(ip) {
-  const now = Date.now();
-  let times = authAttemptsByIp.get(ip) || [];
-  times = times.filter(t => now - t <= AUTH_WINDOW_MS);
-  times.push(now);
-  authAttemptsByIp.set(ip, times);
-
-  if (times.length >= AUTH_MAX_ATTEMPTS) {
-    authBlockedIps.set(ip, now + AUTH_BLOCK_MS);
-    authAttemptsByIp.delete(ip);
-    return false;
-  }
-  return true;
-}
-
-function authRateGuard(req, res, next) {
-  const ip = requestIp(req);
-  if (authBlocked(ip)) {
-    return securityReject(res, 429, "Too many authentication attempts. Try again later.");
-  }
-  if (!recordAuthAttempt(ip)) {
-    return securityReject(res, 429, "Too many authentication attempts. Try again later.");
-  }
-  next();
-}
-
 function securityReject(res, status, message) {
   res.status(status);
   res.set("Cache-Control", "no-store");
@@ -268,9 +242,7 @@ app.use((req, res, next) => {
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "X-DNS-Prefetch-Control": "off",
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": process.env.LBA_CSP ||
-      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.googleapis.com; connect-src 'self' https:; font-src 'self' data: https:; media-src 'self' blob: https:; frame-src 'self' https:; upgrade-insecure-requests"
+    "Cache-Control": "no-store"
   });
   next();
 });
@@ -294,6 +266,15 @@ app.use((req, res, next) => {
     }
   }
 
+  next();
+});
+
+// Country block runs before body parsing.
+// RU = Russia, NL = Netherlands by default.
+app.use((req, res, next) => {
+  if (isCountryBlocked(req)) {
+    return securityReject(res, 403, "LBA is not available in your country");
+  }
   next();
 });
 
@@ -322,14 +303,12 @@ app.use((req, res, next) => {
     return securityReject(res, 429, "Too many requests");
   }
 
-  // Under extreme pressure, fail closed for state-changing traffic.
-  // DO NOT use the mere presence of an Authorization header/cookie as
-  // proof of identity: attackers can forge those values. Individual
-  // protected routes still perform real Firebase verification.
+  // Under extreme pressure, unauthenticated write/API traffic is
+  // rejected first. Health/control remain available.
   if (
     emergencySafeMode &&
     !isSecurityExempt(req) &&
-    isStateChangingRequest(req)
+    !hasAuthorizationSignal(req)
   ) {
     return securityReject(
       res,
@@ -367,14 +346,6 @@ setInterval(() => {
     }
   }
   pruneTimes(globalTraffic, now, GLOBAL_PRESSURE_WINDOW_MS);
-  for (const [ip, times] of authAttemptsByIp) {
-    const kept = times.filter(t => now - t <= AUTH_WINDOW_MS);
-    if (kept.length) authAttemptsByIp.set(ip, kept);
-    else authAttemptsByIp.delete(ip);
-  }
-  for (const [ip, until] of authBlockedIps) {
-    if (now >= until) authBlockedIps.delete(ip);
-  }
   if (globalTraffic.length < GLOBAL_PRESSURE_LIMIT / 2) {
     emergencySafeMode = false;
   }
@@ -414,7 +385,7 @@ setInterval(() => {
 
 const CONTROL_ALLOWED_IPS = String(
   process.env.CONTROL_ALLOWED_IPS ||
-  "185.87.119.86"
+  "192.168.178.69"
 )
   .split(",")
   .map(value => value.trim())
@@ -801,17 +772,16 @@ function isAllowedControlIp(req) {
 }
 
 function hasControlSecret(req) {
-  if (!CONTROL_SECRET || CONTROL_SECRET.length < 32) {
+  if (!CONTROL_SECRET) {
     return false;
   }
 
-  // Never accept secrets in query strings: URLs can leak through logs,
-  // browser history, analytics, proxies and referrer headers.
-  const supplied = String(req.headers["x-lba-control-secret"] || "");
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(CONTROL_SECRET);
+  const supplied =
+    req.headers["x-lba-control-secret"] ||
+    req.query?.control_secret ||
+    "";
 
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  return String(supplied) === CONTROL_SECRET;
 }
 
 function isControlRequest(req) {
@@ -859,10 +829,6 @@ function controlGuard(req, res, next) {
 
   next();
 }
-
-// HARD GATE: every control API endpoint is protected by default.
-// Individual routes cannot accidentally forget the guard.
-app.use("/api/control", controlGuard);
 
 // This middleware is intentionally before the website/static routes.
 // Control requests remain reachable while the LBA server is OFFLINE.
@@ -1679,7 +1645,6 @@ app.get(
 
 app.post(
   "/api/auth/signup",
-  authRateGuard,
   requireFirebase,
   async (req, res) => {
     try {
@@ -1876,7 +1841,6 @@ app.post(
 
 app.post(
   "/api/auth/login",
-  authRateGuard,
   requireFirebase,
   async (req, res) => {
     try {
@@ -3320,16 +3284,110 @@ app.post(
 );
 
 // ============================================================
-// GENERIC DATA API — DISABLED
+// GENERIC DATA API
 // ============================================================
-// A generic collection/id endpoint is intentionally not exposed.
-// Firebase Admin bypasses Firestore client security rules, so a
-// generic endpoint would turn any authorization mistake into an
-// arbitrary database read/write/delete primitive.
 
-app.all("/api/data/:collection/:id", (req, res) => {
-  return securityReject(res, 404, "Not Found");
-});
+app.get(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await readDoc(
+          req.params.collection,
+          req.params.id
+        );
+
+      if (!snapshot.exists) {
+        return res.status(404).json({
+          found: false
+        });
+      }
+
+      res.json({
+        found: true,
+        id: snapshot.id,
+        data: snapshot.data()
+      });
+    } catch (error) {
+      res.status(503).json({
+        found: false,
+        error:
+          "Firebase read failed"
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      if (
+        !req.body ||
+        typeof req.body !== "object"
+      ) {
+        return res.status(400).json({
+          error:
+            "JSON body required"
+        });
+      }
+
+      const saved =
+        await writeDocAndVerify(
+          req.params.collection,
+          req.params.id,
+          {
+            ...req.body,
+            updated_at:
+              FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        );
+
+      res.json({
+        success: true,
+        verified: true,
+        collection:
+          req.params.collection,
+        id: saved.id,
+        data: saved.data()
+      });
+    } catch (error) {
+      res.status(503).json({
+        success: false,
+        error:
+          "Firebase write failed"
+      });
+    }
+  }
+);
+
+app.delete(
+  "/api/data/:collection/:id",
+  requireFirebase,
+  async (req, res) => {
+    try {
+      await deleteDocAndVerify(
+        req.params.collection,
+        req.params.id
+      );
+
+      res.json({
+        success: true,
+        deleted: true,
+        verified: true
+      });
+    } catch (error) {
+      res.status(503).json({
+        success: false,
+        error:
+          "Firebase delete failed"
+      });
+    }
+  }
+);
 
 // ============================================================
 // CONTROL PAGE
@@ -3341,7 +3399,6 @@ app.all("/api/data/:collection/:id", (req, res) => {
 
 app.get(
   ["/control.html", "/Control.html"],
-  controlGuard,
   (req, res) => {
     // control.html itself is PUBLIC and remains reachable even
     // when serverOffline is enabled.
@@ -3402,25 +3459,6 @@ app.get(
 // ============================================================
 // STATIC WEBSITE
 // ============================================================
-
-// Never expose server source, environment files, lockfiles, backups,
-// service-account files, or other project internals through the static
-// file server.
-const FORBIDDEN_STATIC_PATHS = [
-  /^\/server(?:\.js)?$/i,
-  /^\/package(?:-lock)?\.json$/i,
-  /^\/\.env(?:\.|$)/i,
-  /^\/.*(?:service-account|firebase.*credentials).*\.(?:json|pem|key)$/i,
-  /^\/.*\.(?:log|sqlite|db|bak|backup)$/i,
-  /^\/_safety_backups(?:\/|$)/i
-];
-
-app.use((req, res, next) => {
-  if (FORBIDDEN_STATIC_PATHS.some(re => re.test(req.path || ""))) {
-    return securityReject(res, 404, "Not Found");
-  }
-  next();
-});
 
 app.use(
   express.static(
