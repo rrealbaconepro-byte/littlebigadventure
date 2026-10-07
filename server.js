@@ -236,6 +236,10 @@ function countryBlockedResponse(req, res) {
     .toLowerCase()
     .includes("text/html");
 
+  if (acceptsHtml) {
+    return res.redirect(302, "https://serviceunavailable.neocities.org/Banned");
+  }
+
   res.status(403);
   res.set({
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
