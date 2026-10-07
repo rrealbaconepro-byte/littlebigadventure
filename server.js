@@ -231,6 +231,52 @@ function securityReject(res, status, message) {
   });
 }
 
+function countryBlockedResponse(req, res) {
+  const acceptsHtml = String(req.headers.accept || "")
+    .toLowerCase()
+    .includes("text/html");
+
+  res.status(403);
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'"
+  });
+
+  if (!acceptsHtml) {
+    return res.json({
+      success: false,
+      error: "LBA is not available in your country",
+      code: "COUNTRY_BLOCKED"
+    });
+  }
+
+  return res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LBA — Access unavailable</title>
+  <style>
+    html,body{margin:0;min-height:100%;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111;color:#fff}
+    body{display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}
+    main{max-width:620px;text-align:center}
+    h1{font-size:clamp(32px,7vw,56px);margin:0 0 14px}
+    p{font-size:18px;line-height:1.6;color:#ccc;margin:8px 0}
+    .code{display:inline-block;margin-top:18px;padding:8px 12px;border:1px solid #444;border-radius:8px;color:#aaa;font-size:13px}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Access unavailable</h1>
+    <p>LittleBigAdventure is not available from your current country.</p>
+    <p>HTTP 403 — Country blocked</p>
+    <div class="code">COUNTRY_BLOCKED</div>
+  </main>
+</body>
+</html>`);
+}
+
 // Security headers. Render normally terminates public HTTPS before
 // the Node process, so HSTS is appropriate for the public site.
 app.use((req, res, next) => {
@@ -273,7 +319,7 @@ app.use((req, res, next) => {
 // RU = Russia, NL = Netherlands by default.
 app.use((req, res, next) => {
   if (isCountryBlocked(req)) {
-    return securityReject(res, 403, "LBA is not available in your country");
+    return countryBlockedResponse(req, res);
   }
   next();
 });
