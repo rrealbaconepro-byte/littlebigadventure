@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
 const crypto = require("crypto");
+const dns = require("dns").promises;
 
 const { initializeApp, cert, getApps } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
@@ -59,6 +60,61 @@ const FIREBASE_WATCHDOG_MS = Math.max(
 
 const SESSION_COOKIE = "lba_session";
 const SERVICE_NAME = "LittleBigAdventure";
+
+// Public service hostname used for the server information page.
+// Render may use multiple/changing public IP addresses, so this page
+// resolves the hostname instead of pretending the Node process has a
+// permanent public IP.
+const PUBLIC_HOSTNAME = String(
+  process.env.PUBLIC_HOSTNAME || "littlebigadventure.onrender.com"
+).trim();
+
+// ============================================================
+// SERVER IP INFORMATION PAGE
+// ============================================================
+
+app.get("/server-ip", async (req, res) => {
+  try {
+    const records = await dns.lookup(PUBLIC_HOSTNAME, { all: true });
+    const addresses = [...new Set(records.map(record => record.address))];
+
+    res
+      .type("html")
+      .send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LittleBigAdventure Server IP</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#fff;display:grid;place-items:center;min-height:100vh}
+.card{width:min(720px,90%);padding:28px;border-radius:20px;background:#222;box-shadow:0 20px 60px #0008}
+h1{margin-top:0}.ip{font:700 1.5rem ui-monospace,monospace;background:#111;padding:14px;border-radius:12px;margin:10px 0}
+small{color:#aaa}.ok{color:#7cff9b}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>LittleBigAdventure Server</h1>
+<p class="ok">● Server reachable</p>
+<p><strong>Public hostname</strong></p>
+<div class="ip">${PUBLIC_HOSTNAME}</div>
+<p><strong>Current DNS address${addresses.length === 1 ? "" : "es"}</strong></p>
+${addresses.map(address => `<div class="ip">${address}</div>`).join("")}
+<small>These are the public addresses currently returned by DNS. Render infrastructure can change them, so use the hostname for a stable connection.</small>
+</main>
+</body>
+</html>`);
+  } catch (error) {
+    console.error("Server IP lookup failed:", error);
+    res.status(503).type("html").send(`<!doctype html>
+<html><body style="font-family:system-ui;padding:30px">
+<h1>LittleBigAdventure Server</h1>
+<p>Server is online, but its public DNS address could not be resolved right now.</p>
+<p><strong>Hostname:</strong> ${PUBLIC_HOSTNAME}</p>
+</body></html>`);
+  }
+});
 
 // ============================================================
 // SECURITY / TRAFFIC SHIELD
