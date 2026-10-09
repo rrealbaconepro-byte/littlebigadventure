@@ -85,7 +85,7 @@ app.get("/server-ip", async (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LittleBigAdventure Server IP</title>
+<title>LittleBigAdventure — Server IP</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#fff;display:grid;place-items:center;min-height:100vh}
 .card{width:min(720px,90%);padding:28px;border-radius:20px;background:#222;box-shadow:0 20px 60px #0008}
@@ -95,13 +95,13 @@ small{color:#aaa}.ok{color:#7cff9b}
 </head>
 <body>
 <main class="card">
-<h1>LittleBigAdventure Server</h1>
+<h1>LittleBigAdventure Server IP</h1>
 <p class="ok">● Server reachable</p>
-<p><strong>Public hostname</strong></p>
-<div class="ip">${PUBLIC_HOSTNAME}</div>
-<p><strong>Current DNS address${addresses.length === 1 ? "" : "es"}</strong></p>
+<p><strong>SERVER IP ADDRESS</strong></p>
 ${addresses.map(address => `<div class="ip">${address}</div>`).join("")}
-<small>These are the public addresses currently returned by DNS. Render infrastructure can change them, so use the hostname for a stable connection.</small>
+<p><strong>Server hostname</strong></p>
+<div class="ip">${PUBLIC_HOSTNAME}</div>
+<small>These are the public IP addresses that the Render hostname currently resolves to. Render may use shared or changing ingress addresses; this is not necessarily a unique IP for your individual server instance.</small>
 </main>
 </body>
 </html>`);
