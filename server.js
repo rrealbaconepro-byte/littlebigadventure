@@ -38,48 +38,6 @@ app.set("trust proxy", 1);
 
 const PORT = Number(process.env.PORT || 10000);
 
-
-// ============================================================
-// PUBLIC SERVER IP PAGE
-// ============================================================
-// This displays the public DNS address(es) for the Render hostname.
-// Render may use shared or changing IPs; this is not guaranteed to be
-// a unique IP for this individual Node process.
-const PUBLIC_HOSTNAME = String(
-  process.env.PUBLIC_HOSTNAME || "littlebigadventure.onrender.com"
-).trim();
-
-app.get("/server-ip", async (req, res) => {
-  try {
-    const records = await dns.lookup(PUBLIC_HOSTNAME, { all: true });
-    const addresses = [...new Set(records.map(record => record.address))];
-    const items = addresses.length
-      ? addresses.map(ip => `<div class="ip">${ip}</div>`).join("\n")
-      : '<p>No IP addresses were returned.</p>';
-
-    res.set("Cache-Control", "no-store").type("html").send(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LBA Server IP</title>
-<style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#171717;color:#fff;font-family:system-ui,sans-serif;padding:20px;box-sizing:border-box}
-main{width:min(680px,100%);background:#292929;padding:26px;border-radius:18px;box-sizing:border-box;overflow-wrap:anywhere}
-h1{margin-top:0}.ip{font:700 1.35rem ui-monospace,monospace;background:#111;padding:15px;border-radius:10px;margin:12px 0;color:#8dffab}
-small{color:#bbb}
-</style></head><body><main>
-<h1>LittleBigAdventure Server IP</h1>
-<p><strong>IP address(es):</strong></p>
-${items}
-<p>Hostname: <code>${PUBLIC_HOSTNAME.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]))}</code></p>
-<small>These are public DNS addresses for the Render hostname. They may be shared or change and are not necessarily a unique server-instance IP.</small>
-<p><a style="color:#8dffab" href="/">Back to LBA</a></p>
-</main></body></html>`);
-  } catch (error) {
-    console.error("Server IP lookup failed:", error.message);
-    res.status(503).type("html").send("<!doctype html><html><body><h1>Server IP unavailable</h1><p>DNS lookup failed. Please try again later.</p></body></html>");
-  }
-});
-
 const FIREBASE_RETRIES = Math.max(
   1,
   Number(process.env.FIREBASE_RETRIES || 3)
@@ -102,6 +60,61 @@ const FIREBASE_WATCHDOG_MS = Math.max(
 
 const SESSION_COOKIE = "lba_session";
 const SERVICE_NAME = "LittleBigAdventure";
+
+// Public service hostname used for the server information page.
+// Render may use multiple/changing public IP addresses, so this page
+// resolves the hostname instead of pretending the Node process has a
+// permanent public IP.
+const PUBLIC_HOSTNAME = String(
+  process.env.PUBLIC_HOSTNAME || "littlebigadventure.onrender.com"
+).trim();
+
+// ============================================================
+// SERVER IP INFORMATION PAGE
+// ============================================================
+
+app.get("/server-ip", async (req, res) => {
+  try {
+    const records = await dns.lookup(PUBLIC_HOSTNAME, { all: true });
+    const addresses = [...new Set(records.map(record => record.address))];
+
+    res
+      .type("html")
+      .send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LittleBigAdventure Server IP</title>
+<style>
+body{margin:0;font-family:system-ui,sans-serif;background:#111;color:#fff;display:grid;place-items:center;min-height:100vh}
+.card{width:min(720px,90%);padding:28px;border-radius:20px;background:#222;box-shadow:0 20px 60px #0008}
+h1{margin-top:0}.ip{font:700 1.5rem ui-monospace,monospace;background:#111;padding:14px;border-radius:12px;margin:10px 0}
+small{color:#aaa}.ok{color:#7cff9b}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>LittleBigAdventure Server</h1>
+<p class="ok">● Server reachable</p>
+<p><strong>Public hostname</strong></p>
+<div class="ip">${PUBLIC_HOSTNAME}</div>
+<p><strong>Current DNS address${addresses.length === 1 ? "" : "es"}</strong></p>
+${addresses.map(address => `<div class="ip">${address}</div>`).join("")}
+<small>These are the public addresses currently returned by DNS. Render infrastructure can change them, so use the hostname for a stable connection.</small>
+</main>
+</body>
+</html>`);
+  } catch (error) {
+    console.error("Server IP lookup failed:", error);
+    res.status(503).type("html").send(`<!doctype html>
+<html><body style="font-family:system-ui;padding:30px">
+<h1>LittleBigAdventure Server</h1>
+<p>Server is online, but its public DNS address could not be resolved right now.</p>
+<p><strong>Hostname:</strong> ${PUBLIC_HOSTNAME}</p>
+</body></html>`);
+  }
+});
 
 // ============================================================
 // SECURITY / TRAFFIC SHIELD
@@ -966,6 +979,142 @@ async function requireFirebase(req, res, next) {
 
   next();
 }
+
+// ============================================================
+// LBA FIREBASE AUTHORIZATION CHECKPOINT
+// ============================================================
+// Before normal API requests continue, the server checks the policy
+// stored in Firestore at _system/accessControl. A valid decision
+// requires enabled=true, authorized=true, and a matching SHA-256 hash.
+// Missing configuration, denied policy, malformed policy, or Firebase
+// errors fail closed. The raw checkpoint secret is never sent to Firebase.
+//
+// Render environment variable required:
+//   LBA_CHECKPOINT_CODE = a random secret of at least 32 characters
+//
+// Firestore document required:
+//   _system/accessControl
+//   enabled: true (boolean)
+//   authorized: true (boolean)
+//   codeHash: SHA-256 hex digest of LBA_CHECKPOINT_CODE
+// ============================================================
+
+const CHECKPOINT_CODE = String(
+  process.env.LBA_CHECKPOINT_CODE || ""
+);
+const CHECKPOINT_CACHE_MS = 5000;
+let checkpointCache = {
+  checkedAt: 0,
+  authorized: false
+};
+let checkpointCheckInProgress = null;
+
+async function checkAuthorizationCheckpoint() {
+  const now = Date.now();
+
+  if (CHECKPOINT_CODE.length < 32) {
+    checkpointCache = { checkedAt: now, authorized: false };
+    return false;
+  }
+
+  if (now - checkpointCache.checkedAt < CHECKPOINT_CACHE_MS) {
+    return checkpointCache.authorized;
+  }
+
+  if (checkpointCheckInProgress) {
+    return checkpointCheckInProgress;
+  }
+
+  checkpointCheckInProgress = (async () => {
+    try {
+      if (firebaseManuallyDisabled || !db || !auth) {
+        throw new Error("Authorization service unavailable");
+      }
+
+      const snapshot = await firebaseRetry(
+        "AUTHORIZATION CHECKPOINT",
+        () => db.collection("_system").doc("accessControl").get()
+      );
+
+      if (!snapshot.exists) {
+        throw new Error("Authorization policy missing");
+      }
+
+      const policy = snapshot.data() || {};
+      if (
+        policy.enabled !== true ||
+        policy.authorized !== true ||
+        typeof policy.codeHash !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(policy.codeHash)
+      ) {
+        throw new Error("Authorization policy denied access");
+      }
+
+      const suppliedHash = crypto
+        .createHash("sha256")
+        .update(CHECKPOINT_CODE, "utf8")
+        .digest();
+      const expectedHash = Buffer.from(policy.codeHash, "hex");
+
+      const authorized =
+        expectedHash.length === suppliedHash.length &&
+        crypto.timingSafeEqual(expectedHash, suppliedHash);
+
+      checkpointCache = {
+        checkedAt: Date.now(),
+        authorized
+      };
+
+      return authorized;
+    } catch (error) {
+      // Do not log the secret, hash, or raw policy values.
+      console.error("[Checkpoint] Authorization verification failed.");
+      checkpointCache = {
+        checkedAt: Date.now(),
+        authorized: false
+      };
+      return false;
+    } finally {
+      checkpointCheckInProgress = null;
+    }
+  })();
+
+  return checkpointCheckInProgress;
+}
+
+async function authorizationCheckpoint(req, res, next) {
+  const requestPath = (req.originalUrl || "").split("?")[0];
+
+  // Leave diagnostics reachable so an administrator can see outages.
+  if (
+    requestPath === "/api/status" ||
+    requestPath === "/api/firebase-test"
+  ) {
+    return next();
+  }
+
+  // Control APIs have a separate IP/secret guard and must remain usable
+  // for recovery if Firebase is unavailable.
+  if (requestPath.startsWith("/api/control/")) {
+    return next();
+  }
+
+  const authorized = await checkAuthorizationCheckpoint();
+  if (!authorized) {
+    return res.status(403).set("Cache-Control", "no-store").json({
+      success: false,
+      authorized: false,
+      blocked: true,
+      error: "LBA authorization checkpoint denied this request"
+    });
+  }
+
+  req.lbaCheckpointAuthorized = true;
+  return next();
+}
+
+// Registered before the application's normal API routes.
+app.use("/api", authorizationCheckpoint);
 
 // ============================================================
 // FIRESTORE HELPERS
